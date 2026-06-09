@@ -5,6 +5,7 @@ const prompt = "db > "
 const (
 	columnUsernameSize = 32
 	columnEmailSize    = 255
+	defaultTextSize    = 255
 
 	idSize       = 4
 	usernameSize = columnUsernameSize + 1
@@ -77,6 +78,7 @@ const (
 	ExecuteSuccess ExecuteResult = iota
 	ExecuteDuplicateKey
 	ExecuteTableFull
+	ExecuteTableNotEmpty
 )
 
 // PrepareResult は入力文字列を実行可能なステートメントへ変換できたかを表す。
@@ -86,6 +88,7 @@ const (
 	PrepareSuccess PrepareResult = iota
 	PrepareNegativeID
 	PrepareStringTooLong
+	PrepareRowTooLarge
 	PrepareSyntaxError
 	PrepareUnrecognizedStatement
 )
@@ -96,6 +99,7 @@ type StatementType int
 const (
 	StatementInsert StatementType = iota
 	StatementSelect
+	StatementCreateTable
 )
 
 // NodeType はB-Treeノードの種類を表す。

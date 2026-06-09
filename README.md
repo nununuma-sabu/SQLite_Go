@@ -3,7 +3,7 @@
 SQLiteのような小さなデータベースをGoで段階的に実装する学習用プロジェクトです。
 
 現在の実装では、対話形式のプロンプトを表示し、`.exit` が入力されたら終了します。
-`insert` で固定スキーマのレコードを保存し、`select` で保存済みの全レコードを表示します。
+`create table` で実行中のテーブルスキーマを定義し、`insert` でレコードを保存し、`select` で保存済みの全レコードを表示します。
 データは指定したDBファイルへ保存されるため、プログラムを終了しても残ります。
 保存形式はB-Treeのleaf nodeを使う形に進んでいます。
 root leaf node、子leaf node、internal nodeの分割に対応しています。
@@ -95,6 +95,37 @@ Tree:
   - 3
 db >
 ```
+
+## CREATE TABLE
+
+`create table` は、空のテーブルに対してカラム定義を設定します。
+現時点では `id` カラムを `INTEGER` として含める必要があり、この `id` をB-Treeのキーとして使います。
+
+対応している型:
+
+- `INTEGER`
+- `TEXT`
+- `REAL`
+
+```text
+db > create table people (id integer, name text, height real, weight real)
+Executed.
+db > insert 1 Alice 165.2 54.3
+Executed.
+db > insert 2 Bob 172.4 68.1
+Executed.
+db > select
+(1, Alice, 165.2, 54.3)
+(2, Bob, 172.4, 68.1)
+Executed.
+db >
+```
+
+注意:
+
+- 既にレコードがあるテーブルに対する `create table` は拒否します。
+- スキーマ定義はまだDBファイルへ保存していません。再起動後はデフォルトスキーマに戻ります。
+- 1行のサイズが現在のセル値領域である `ROW_SIZE` を超えるスキーマは拒否します。
 
 `insert` で始まる入力は、insertステートメントとして仮実行されます。
 形式は `insert <id> <username> <email>` です。

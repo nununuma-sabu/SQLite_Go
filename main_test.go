@@ -268,6 +268,80 @@ func TestRunPrintsErrorForNegativeID(t *testing.T) {
 	}
 }
 
+func TestRunCreatesTableAndUsesCustomSchema(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer, name text, height real, weight real)",
+		"insert 1 Alice 165.2 54.3",
+		"insert 2 Bob 172.4 68.1",
+		"select",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (1, Alice, 165.2, 54.3)",
+		"(2, Bob, 172.4, 68.1)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunSelectsByIDWithCustomSchema(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer, name text, height real, weight real)",
+		"insert 1 Alice 165.2 54.3",
+		"insert 2 Bob 172.4 68.1",
+		"select 2",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (2, Bob, 172.4, 68.1)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunRejectsCreateTableWhenTableHasRows(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"create table people (id integer, name text, height real, weight real)",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Error: Table is not empty.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunRejectsRowsLargerThanCurrentCellLayout(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table huge (id integer, first_name text, last_name text)",
+		".exit",
+	})
+
+	want := "db > Row is too large.\ndb > "
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunPrintsSevenLeafNodeBTree(t *testing.T) {
 	ids := []uint32{
 		58, 56, 8, 54, 77, 7, 25, 71, 13, 22,
@@ -738,10 +812,10 @@ func TestSerializeAndDeserializeRow(t *testing.T) {
 	}
 	storage := make([]byte, rowSize)
 
-	serializeRow(row, storage)
-	got := deserializeRow(storage)
+	serializeRow(row, DefaultTableSchema(), storage)
+	got := deserializeRow(storage, DefaultTableSchema())
 
-	if got != row {
+	if got.ID != row.ID || got.Username != row.Username || got.Email != row.Email {
 		t.Fatalf("expected row %#v, got %#v", row, got)
 	}
 }

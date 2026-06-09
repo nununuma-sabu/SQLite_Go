@@ -64,6 +64,9 @@ func run(in io.Reader, out io.Writer, table *Table) (code ExitCode) {
 		case PrepareStringTooLong:
 			fmt.Fprintln(out, "String is too long.")
 			continue
+		case PrepareRowTooLarge:
+			fmt.Fprintln(out, "Row is too large.")
+			continue
 		case PrepareSyntaxError:
 			fmt.Fprintln(out, "Syntax error. Could not parse statement.")
 			continue
@@ -79,6 +82,8 @@ func run(in io.Reader, out io.Writer, table *Table) (code ExitCode) {
 			fmt.Fprintln(out, "Error: Duplicate key.")
 		case ExecuteTableFull:
 			fmt.Fprintln(out, "Error: Table full.")
+		case ExecuteTableNotEmpty:
+			fmt.Fprintln(out, "Error: Table is not empty.")
 		}
 	}
 }

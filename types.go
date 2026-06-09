@@ -7,13 +7,23 @@ type Statement struct {
 	Type        StatementType
 	RowToInsert Row
 	SelectByID  *uint32
+	Schema      TableSchema
 }
 
-// Row は固定スキーマの1レコードを表す。
+// Row は1レコードを表す。
 type Row struct {
 	ID       uint32
 	Username string
 	Email    string
+	Values   map[string]Value
+}
+
+// Value はRow内の1カラム値を表す。
+type Value struct {
+	StorageClass StorageClass
+	Integer      int64
+	Real         float64
+	Text         string
 }
 
 // Table はページ配列を持つオンメモリのテーブルを表す。

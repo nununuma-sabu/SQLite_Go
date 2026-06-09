@@ -170,7 +170,7 @@ func leafNodeSplitAndInsert(cursor *Cursor, key uint32, value Row) {
 
 		if uint32(i) == cursor.CellNum {
 			setLeafNodeKey(destinationNode, indexWithinNode, key)
-			serializeRow(value, leafNodeValue(destinationNode, indexWithinNode))
+			serializeRow(value, cursor.Table.Schema, leafNodeValue(destinationNode, indexWithinNode))
 		} else if uint32(i) > cursor.CellNum {
 			copy(destination, leafNodeCell(oldNode, uint32(i)-1))
 		} else {
@@ -212,5 +212,5 @@ func leafNodeInsert(cursor *Cursor, key uint32, value Row) {
 
 	setLeafNodeNumCells(node, numCells+1)
 	setLeafNodeKey(node, cursor.CellNum, key)
-	serializeRow(value, leafNodeValue(node, cursor.CellNum))
+	serializeRow(value, cursor.Table.Schema, leafNodeValue(node, cursor.CellNum))
 }

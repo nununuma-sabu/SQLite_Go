@@ -94,11 +94,19 @@ type RowLayout struct {
 
 // NewColumn は宣言型からSQLite風の型アフィニティを推定してカラム定義を作る。
 func NewColumn(name string, declaredType string) Column {
-	return Column{
+	column := Column{
 		Name:         name,
 		DeclaredType: declaredType,
 		Affinity:     InferTypeAffinity(declaredType),
 	}
+	if column.Affinity == AffinityText {
+		column.MaxLength = defaultTextSize
+	}
+	if strings.EqualFold(column.Name, idColumnName) && column.Affinity == AffinityInteger {
+		column.PrimaryKey = true
+	}
+
+	return column
 }
 
 // DefaultTableSchema は現在の固定Row実装に対応するスキーマを返す。
@@ -192,7 +200,14 @@ func (column Column) StorageSize() uint32 {
 }
 
 func (column Column) ValidateIntegerValue(value int64) bool {
-	return column.Affinity == AffinityInteger && value >= 0
+	if column.Affinity != AffinityInteger {
+		return false
+	}
+	if column.PrimaryKey {
+		return value >= 0
+	}
+
+	return true
 }
 
 func (column Column) ValidateTextValue(value string) bool {
