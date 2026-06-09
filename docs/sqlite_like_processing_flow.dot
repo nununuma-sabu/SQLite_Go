@@ -1,0 +1,30 @@
+digraph SQLiteLikeProcessingFlow {
+  graph [
+    rankdir=TB,
+    bgcolor="white",
+    margin=0.15,
+    nodesep=0.18,
+    ranksep=0.28
+  ];
+
+  node [
+    shape=box,
+    style="filled",
+    fillcolor="#93c5f4",
+    color="#111111",
+    penwidth=1.4,
+    fontname="DejaVu Sans",
+    fontsize=28,
+    width=4.8,
+    height=0.74,
+    margin="0.16,0.08"
+  ];
+
+  edge [
+    color="#111111",
+    penwidth=1.5,
+    arrowsize=0.8
+  ];
+
+  Tokenizer -> Parser -> "Code Generator" -> "Virtual Machine" -> "B-Tree" -> Pager -> "OS Interface";
+}
