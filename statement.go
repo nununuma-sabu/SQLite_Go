@@ -4,6 +4,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 func prepareCreateTable(input string, statement *Statement) PrepareResult {
@@ -24,7 +25,10 @@ func prepareCreateTable(input string, statement *Statement) PrepareResult {
 func prepareInsert(input string, statement *Statement, schema TableSchema) PrepareResult {
 	statement.Type = StatementInsert
 
-	fields := strings.Fields(input)
+	fields, ok := parseInsertFields(input)
+	if !ok {
+		return PrepareSyntaxError
+	}
 	if len(fields) != len(schema.Columns)+1 {
 		return PrepareSyntaxError
 	}
@@ -58,6 +62,95 @@ func prepareInsert(input string, statement *Statement, schema TableSchema) Prepa
 	}
 
 	return PrepareSuccess
+}
+
+func parseInsertFields(input string) ([]string, bool) {
+	fields := []string{}
+	for i := 0; i < len(input); {
+		for i < len(input) && unicode.IsSpace(rune(input[i])) {
+			i++
+		}
+		if i >= len(input) {
+			break
+		}
+
+		if input[i] == '\'' {
+			value, next, ok := parseSQLStringLiteral(input, i)
+			if !ok {
+				return nil, false
+			}
+			fields = append(fields, value)
+			i = next
+			if i < len(input) && !unicode.IsSpace(rune(input[i])) {
+				return nil, false
+			}
+			continue
+		}
+
+		start := i
+		for i < len(input) && !unicode.IsSpace(rune(input[i])) {
+			if input[i] == '\'' {
+				return nil, false
+			}
+			i++
+		}
+		fields = append(fields, input[start:i])
+	}
+
+	return fields, true
+}
+
+func parseSQLStringLiteral(input string, start int) (string, int, bool) {
+	var builder strings.Builder
+	for i := start + 1; i < len(input); i++ {
+		switch input[i] {
+		case '\'':
+			if i+1 < len(input) && input[i+1] == '\'' {
+				builder.WriteByte('\'')
+				i++
+				continue
+			}
+			return builder.String(), i + 1, true
+		case '\\':
+			if i+1 >= len(input) {
+				return "", 0, false
+			}
+			escaped, ok := mysqlEscapedByte(input[i+1])
+			if !ok {
+				builder.WriteByte(input[i+1])
+			} else {
+				builder.WriteByte(escaped)
+			}
+			i++
+		default:
+			builder.WriteByte(input[i])
+		}
+	}
+
+	return "", 0, false
+}
+
+func mysqlEscapedByte(value byte) (byte, bool) {
+	switch value {
+	case '\'':
+		return '\'', true
+	case '"':
+		return '"', true
+	case 'b':
+		return '\b', true
+	case 'n':
+		return '\n', true
+	case 'r':
+		return '\r', true
+	case 't':
+		return '\t', true
+	case 'Z':
+		return 26, true
+	case '\\':
+		return '\\', true
+	default:
+		return 0, false
+	}
 }
 
 // create table入力からテーブル名とカラム定義を取り出す。

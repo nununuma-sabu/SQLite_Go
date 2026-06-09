@@ -78,6 +78,51 @@ func TestRunExecutesInsertStatement(t *testing.T) {
 	}
 }
 
+func TestRunExecutesInsertStatementWithQuotedText(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 'Alice Smith' 'alice smith@example.com'",
+		"insert 2 'Bob''s note' 'bob@example.com'",
+		"select",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > (1, Alice Smith, alice smith@example.com)",
+		"(2, Bob's note, bob@example.com)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestPrepareInsertParsesBackslashEscapesInQuotedText(t *testing.T) {
+	var statement Statement
+	result := prepareStatement("insert 1 'Alice\\nSmith' 'alice\\\\smith@example.com'", &statement, DefaultTableSchema())
+
+	if result != PrepareSuccess {
+		t.Fatalf("expected prepare success, got %d", result)
+	}
+	if got := statement.RowToInsert.Values[usernameColumnName].Text; got != "Alice\nSmith" {
+		t.Fatalf("expected escaped newline, got %q", got)
+	}
+	if got := statement.RowToInsert.Values[emailColumnName].Text; got != "alice\\smith@example.com" {
+		t.Fatalf("expected escaped backslash, got %q", got)
+	}
+}
+
+func TestPrepareInsertRejectsUnterminatedQuotedText(t *testing.T) {
+	var statement Statement
+	result := prepareStatement("insert 1 'Alice Smith alice@example.com", &statement, DefaultTableSchema())
+
+	if result != PrepareSyntaxError {
+		t.Fatalf("expected syntax error, got %d", result)
+	}
+}
+
 func TestRunExecutesSelectStatement(t *testing.T) {
 	// selectは保存済みの全Rowを表示する。
 	got := runTempScript(t, []string{
