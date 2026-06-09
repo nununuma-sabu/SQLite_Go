@@ -91,6 +91,36 @@ func TestDefaultTableSchema(t *testing.T) {
 	}
 }
 
+func TestDefaultTableSchemaRowLayout(t *testing.T) {
+	layout := DefaultTableSchema().RowLayout()
+
+	if layout.Size != 293 {
+		t.Fatalf("expected row layout size %d, got %d", 293, layout.Size)
+	}
+
+	tests := []struct {
+		columnName string
+		start      uint32
+		end        uint32
+	}{
+		{columnName: idColumnName, start: 0, end: 4},
+		{columnName: usernameColumnName, start: 4, end: 37},
+		{columnName: emailColumnName, start: 37, end: 293},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.columnName, func(t *testing.T) {
+			start, end, ok := layout.ColumnRange(tt.columnName)
+			if !ok {
+				t.Fatalf("expected column %q in row layout", tt.columnName)
+			}
+			if start != tt.start || end != tt.end {
+				t.Fatalf("expected range [%d:%d], got [%d:%d]", tt.start, tt.end, start, end)
+			}
+		})
+	}
+}
+
 func TestColumnValidation(t *testing.T) {
 	idColumn := NewColumn("id", "INTEGER")
 	if !idColumn.ValidateIntegerValue(1) {

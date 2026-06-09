@@ -340,7 +340,8 @@ GOCACHE=/tmp/go-build go test ./...
 | `email` | `TEXT` | `TEXT` | 255文字以内 |
 
 `insert` と `select <id>` のID検証、`username` / `email` の長さ検証は、このスキーマを参照します。
-保存形式はまだ固定長Rowのままですが、将来の `CREATE TABLE` 実装で任意カラムへ広げるための接続点になります。
+保存形式はまだ固定長Rowのままですが、Rowのカラムオフセットとサイズはスキーマから計算する `RowLayout` を使います。
+将来の `CREATE TABLE` 実装で任意カラムへ広げるための接続点になります。
 
 値そのものの保存形式として、以下のストレージクラスを定義しています。
 

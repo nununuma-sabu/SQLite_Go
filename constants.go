@@ -9,12 +9,19 @@ const (
 	idSize       = 4
 	usernameSize = columnUsernameSize + 1
 	emailSize    = columnEmailSize + 1
+)
 
-	idOffset       = 0
-	usernameOffset = idOffset + idSize
-	emailOffset    = usernameOffset + usernameSize
-	rowSize        = idSize + usernameSize + emailSize
+var (
+	rowSize                 uint32 = DefaultTableSchema().RowLayout().Size
+	leafNodeValueSize       uint32 = rowSize
+	leafNodeCellSize        uint32 = leafNodeKeySize + leafNodeValueSize
+	leafNodeSpaceForCells   uint32 = pageSize - leafNodeHeaderSize
+	leafNodeMaxCells        uint32 = leafNodeSpaceForCells / leafNodeCellSize
+	leafNodeRightSplitCount uint32 = (leafNodeMaxCells + 1) / 2
+	leafNodeLeftSplitCount  uint32 = (leafNodeMaxCells + 1) - leafNodeRightSplitCount
+)
 
+const (
 	pageSize              = 4096
 	tableMaxPages         = 100
 	invalidPageNum uint32 = 1<<32 - 1
@@ -32,15 +39,9 @@ const (
 	leafNodeNextLeafOffset = leafNodeNumCellsOffset + leafNodeNumCellsSize
 	leafNodeHeaderSize     = commonNodeHeaderSize + leafNodeNumCellsSize + leafNodeNextLeafSize
 
-	leafNodeKeySize         = 4
-	leafNodeKeyOffset       = 0
-	leafNodeValueSize       = rowSize
-	leafNodeValueOffset     = leafNodeKeyOffset + leafNodeKeySize
-	leafNodeCellSize        = leafNodeKeySize + leafNodeValueSize
-	leafNodeSpaceForCells   = pageSize - leafNodeHeaderSize
-	leafNodeMaxCells        = leafNodeSpaceForCells / leafNodeCellSize
-	leafNodeRightSplitCount = (leafNodeMaxCells + 1) / 2
-	leafNodeLeftSplitCount  = (leafNodeMaxCells + 1) - leafNodeRightSplitCount
+	leafNodeKeySize     = 4
+	leafNodeKeyOffset   = 0
+	leafNodeValueOffset = leafNodeKeyOffset + leafNodeKeySize
 
 	internalNodeNumKeysSize      = 4
 	internalNodeNumKeysOffset    = commonNodeHeaderSize

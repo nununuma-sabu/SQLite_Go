@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+var defaultRowLayout = DefaultTableSchema().RowLayout()
+
 // Rowを画面表示用の形式で出力する。
 func printRow(row Row, out io.Writer) {
 	fmt.Fprintf(out, "(%d, %s, %s)\n", row.ID, row.Username, row.Email)
@@ -28,16 +30,33 @@ func readFixedString(source []byte) string {
 
 // Rowをページ内に保存できる固定長のバイト列へ変換する。
 func serializeRow(source Row, destination []byte) {
-	binary.LittleEndian.PutUint32(destination[idOffset:usernameOffset], source.ID)
-	writeFixedString(destination[usernameOffset:emailOffset], source.Username)
-	writeFixedString(destination[emailOffset:rowSize], source.Email)
+	idStart, idEnd := mustColumnRange(defaultRowLayout, idColumnName)
+	usernameStart, usernameEnd := mustColumnRange(defaultRowLayout, usernameColumnName)
+	emailStart, emailEnd := mustColumnRange(defaultRowLayout, emailColumnName)
+
+	binary.LittleEndian.PutUint32(destination[idStart:idEnd], source.ID)
+	writeFixedString(destination[usernameStart:usernameEnd], source.Username)
+	writeFixedString(destination[emailStart:emailEnd], source.Email)
 }
 
 // 固定長のバイト列からRowを復元する。
 func deserializeRow(source []byte) Row {
+	idStart, idEnd := mustColumnRange(defaultRowLayout, idColumnName)
+	usernameStart, usernameEnd := mustColumnRange(defaultRowLayout, usernameColumnName)
+	emailStart, emailEnd := mustColumnRange(defaultRowLayout, emailColumnName)
+
 	return Row{
-		ID:       binary.LittleEndian.Uint32(source[idOffset:usernameOffset]),
-		Username: readFixedString(source[usernameOffset:emailOffset]),
-		Email:    readFixedString(source[emailOffset:rowSize]),
+		ID:       binary.LittleEndian.Uint32(source[idStart:idEnd]),
+		Username: readFixedString(source[usernameStart:usernameEnd]),
+		Email:    readFixedString(source[emailStart:emailEnd]),
 	}
+}
+
+func mustColumnRange(layout RowLayout, columnName string) (uint32, uint32) {
+	start, end, ok := layout.ColumnRange(columnName)
+	if !ok {
+		panic(fmt.Sprintf("missing column in row layout: %s", columnName))
+	}
+
+	return start, end
 }

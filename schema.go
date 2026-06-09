@@ -85,6 +85,13 @@ type TableSchema struct {
 	Columns []Column
 }
 
+// RowLayout はスキーマから計算した1行分の固定長レイアウトを表す。
+type RowLayout struct {
+	ColumnOffsets map[string]uint32
+	ColumnSizes   map[string]uint32
+	Size          uint32
+}
+
 // NewColumn は宣言型からSQLite風の型アフィニティを推定してカラム定義を作る。
 func NewColumn(name string, declaredType string) Column {
 	return Column{
@@ -139,6 +146,49 @@ func (schema TableSchema) PrimaryKeyColumn() (Column, bool) {
 	}
 
 	return Column{}, false
+}
+
+func (schema TableSchema) RowLayout() RowLayout {
+	layout := RowLayout{
+		ColumnOffsets: make(map[string]uint32, len(schema.Columns)),
+		ColumnSizes:   make(map[string]uint32, len(schema.Columns)),
+	}
+
+	for _, column := range schema.Columns {
+		columnSize := column.StorageSize()
+		layout.ColumnOffsets[column.Name] = layout.Size
+		layout.ColumnSizes[column.Name] = columnSize
+		layout.Size += columnSize
+	}
+
+	return layout
+}
+
+func (layout RowLayout) ColumnRange(columnName string) (uint32, uint32, bool) {
+	offset, ok := layout.ColumnOffsets[columnName]
+	if !ok {
+		return 0, 0, false
+	}
+
+	size := layout.ColumnSizes[columnName]
+	return offset, offset + size, true
+}
+
+func (column Column) StorageSize() uint32 {
+	switch column.Affinity {
+	case AffinityInteger:
+		return idSize
+	case AffinityText:
+		return column.MaxLength + 1
+	case AffinityReal:
+		return 8
+	case AffinityBlob, AffinityNumeric:
+		if column.MaxLength > 0 {
+			return column.MaxLength
+		}
+	}
+
+	return 0
 }
 
 func (column Column) ValidateIntegerValue(value int64) bool {
