@@ -107,6 +107,8 @@ func parseCreateTable(input string) (TableSchema, bool) {
 
 // 入力文字列を実行可能なステートメントへ変換する。
 func prepareStatement(input string, statement *Statement, schema TableSchema) PrepareResult {
+	input = strings.TrimSpace(input)
+
 	if strings.HasPrefix(strings.ToLower(input), "create table") {
 		return prepareCreateTable(input, statement)
 	}

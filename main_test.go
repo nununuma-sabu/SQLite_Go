@@ -100,6 +100,24 @@ func TestRunExecutesSelectStatement(t *testing.T) {
 	}
 }
 
+func TestRunExecutesStatementWithSurroundingSpaces(t *testing.T) {
+	got := runTempScript(t, []string{
+		" insert 1 alice alice@example.com ",
+		" select ",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > (1, alice, alice@example.com)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesSelectByIDStatement(t *testing.T) {
 	got := runTempScript(t, []string{
 		"insert 1 alice alice@example.com",
