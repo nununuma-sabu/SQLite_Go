@@ -47,6 +47,48 @@ func TestNewColumnSetsAffinity(t *testing.T) {
 	}
 }
 
+func TestParseCreateTableWithColumnConstraints(t *testing.T) {
+	schema, ok := parseCreateTable("create table people (id integer primary key, name text not null, code integer unique)")
+	if !ok {
+		t.Fatal("expected schema to parse")
+	}
+
+	idColumn, ok := schema.Column("id")
+	if !ok {
+		t.Fatal("expected id column")
+	}
+	if !idColumn.PrimaryKey || !idColumn.PrimaryKeyConstraint {
+		t.Fatal("expected id primary key constraint")
+	}
+
+	nameColumn, ok := schema.Column("name")
+	if !ok {
+		t.Fatal("expected name column")
+	}
+	if !nameColumn.NotNull {
+		t.Fatal("expected name not null constraint")
+	}
+
+	codeColumn, ok := schema.Column("code")
+	if !ok {
+		t.Fatal("expected code column")
+	}
+	if !codeColumn.Unique {
+		t.Fatal("expected code unique constraint")
+	}
+}
+
+func TestParseCreateTableWithConflictClauses(t *testing.T) {
+	schema, ok := parseCreateTable("create table people (id integer primary key asc, name text not null on conflict abort, code integer unique on conflict fail)")
+	if !ok {
+		t.Fatal("expected schema to parse")
+	}
+
+	if got := schema.CreateStatement(); got != "create table people (id integer primary key, name text not null, code integer unique)" {
+		t.Fatalf("expected normalized create statement, got %q", got)
+	}
+}
+
 func TestDefaultTableSchema(t *testing.T) {
 	schema := DefaultTableSchema()
 

@@ -176,15 +176,46 @@ func parseCreateTable(input string) (TableSchema, bool) {
 		return TableSchema{}, false
 	}
 
-	columnDefinitions := strings.Split(trimmed[openParen+1:closeParen], ",")
-	columns := make([]Column, 0, len(columnDefinitions))
-	for _, definition := range columnDefinitions {
-		parts := strings.Fields(strings.TrimSpace(definition))
-		if len(parts) < 2 {
+	definitions, ok := splitSQLList(trimmed[openParen+1 : closeParen])
+	if !ok {
+		return TableSchema{}, false
+	}
+	columns := make([]Column, 0, len(definitions))
+	tablePrimaryKey := ""
+	for _, definition := range definitions {
+		if isTableConstraint(definition) {
+			primaryKey, ok := parseTablePrimaryKeyConstraint(definition)
+			if !ok {
+				return TableSchema{}, false
+			}
+			if tablePrimaryKey != "" {
+				return TableSchema{}, false
+			}
+			tablePrimaryKey = primaryKey
+			continue
+		}
+
+		column, ok := parseColumnDefinition(definition)
+		if !ok {
 			return TableSchema{}, false
 		}
 
-		columns = append(columns, NewColumn(parts[0], strings.Join(parts[1:], " ")))
+		columns = append(columns, column)
+	}
+
+	if tablePrimaryKey != "" {
+		found := false
+		for i := range columns {
+			if strings.EqualFold(columns[i].Name, tablePrimaryKey) {
+				columns[i].PrimaryKey = true
+				columns[i].PrimaryKeyConstraint = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return TableSchema{}, false
+		}
 	}
 
 	schema := TableSchema{
@@ -196,6 +227,177 @@ func parseCreateTable(input string) (TableSchema, bool) {
 	}
 
 	return schema, true
+}
+
+func splitSQLList(input string) ([]string, bool) {
+	items := []string{}
+	start := 0
+	depth := 0
+	inString := false
+
+	for i := 0; i < len(input); i++ {
+		switch input[i] {
+		case '\'':
+			if inString && i+1 < len(input) && input[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+		case '(':
+			if !inString {
+				depth++
+			}
+		case ')':
+			if !inString {
+				depth--
+				if depth < 0 {
+					return nil, false
+				}
+			}
+		case ',':
+			if !inString && depth == 0 {
+				item := strings.TrimSpace(input[start:i])
+				if item == "" {
+					return nil, false
+				}
+				items = append(items, item)
+				start = i + 1
+			}
+		}
+	}
+	if inString || depth != 0 {
+		return nil, false
+	}
+
+	item := strings.TrimSpace(input[start:])
+	if item == "" {
+		return nil, false
+	}
+
+	return append(items, item), true
+}
+
+func isTableConstraint(definition string) bool {
+	tokens := strings.Fields(definition)
+	if len(tokens) == 0 {
+		return false
+	}
+	index := 0
+	if strings.EqualFold(tokens[index], "constraint") {
+		index += 2
+	}
+	if index >= len(tokens) {
+		return false
+	}
+
+	return strings.EqualFold(tokens[index], "primary") ||
+		strings.EqualFold(tokens[index], "unique") ||
+		strings.EqualFold(tokens[index], "check") ||
+		strings.EqualFold(tokens[index], "foreign")
+}
+
+func parseTablePrimaryKeyConstraint(definition string) (string, bool) {
+	normalized := strings.TrimSpace(definition)
+	tokens := strings.Fields(normalized)
+	index := 0
+	if len(tokens) >= 2 && strings.EqualFold(tokens[0], "constraint") {
+		index = 2
+	}
+	if index+1 >= len(tokens) || !strings.EqualFold(tokens[index], "primary") || !strings.EqualFold(tokens[index+1], "key") {
+		return "", false
+	}
+
+	openParen := strings.Index(normalized, "(")
+	closeParen := strings.LastIndex(normalized, ")")
+	if openParen < 0 || closeParen < openParen || strings.TrimSpace(normalized[closeParen+1:]) != "" {
+		return "", false
+	}
+
+	columns, ok := splitSQLList(normalized[openParen+1 : closeParen])
+	if !ok || len(columns) != 1 {
+		return "", false
+	}
+
+	return strings.TrimSpace(columns[0]), true
+}
+
+func parseColumnDefinition(definition string) (Column, bool) {
+	parts := strings.Fields(strings.TrimSpace(definition))
+	if len(parts) < 2 {
+		return Column{}, false
+	}
+
+	constraintIndex := len(parts)
+	for i := 1; i < len(parts); i++ {
+		if isColumnConstraintKeyword(parts[i]) {
+			constraintIndex = i
+			break
+		}
+	}
+	if constraintIndex == 1 {
+		return Column{}, false
+	}
+
+	column := NewColumn(parts[0], strings.Join(parts[1:constraintIndex], " "))
+	for i := constraintIndex; i < len(parts); i++ {
+		if strings.EqualFold(parts[i], "constraint") {
+			i++
+			if i >= len(parts) {
+				return Column{}, false
+			}
+			continue
+		}
+
+		switch {
+		case strings.EqualFold(parts[i], "primary"):
+			if i+1 >= len(parts) || !strings.EqualFold(parts[i+1], "key") {
+				return Column{}, false
+			}
+			column.PrimaryKey = true
+			column.PrimaryKeyConstraint = true
+			i++
+		case strings.EqualFold(parts[i], "not"):
+			if i+1 >= len(parts) || !strings.EqualFold(parts[i+1], "null") {
+				return Column{}, false
+			}
+			column.NotNull = true
+			i++
+		case strings.EqualFold(parts[i], "unique"):
+			column.Unique = true
+		case strings.EqualFold(parts[i], "asc"),
+			strings.EqualFold(parts[i], "desc"),
+			strings.EqualFold(parts[i], "autoincrement"):
+		case strings.EqualFold(parts[i], "on"):
+			if i+2 >= len(parts) || !strings.EqualFold(parts[i+1], "conflict") || !isConflictResolution(parts[i+2]) {
+				return Column{}, false
+			}
+			i += 2
+		default:
+			return Column{}, false
+		}
+	}
+
+	return column, true
+}
+
+func isColumnConstraintKeyword(token string) bool {
+	return strings.EqualFold(token, "constraint") ||
+		strings.EqualFold(token, "primary") ||
+		strings.EqualFold(token, "not") ||
+		strings.EqualFold(token, "unique") ||
+		strings.EqualFold(token, "check") ||
+		strings.EqualFold(token, "default") ||
+		strings.EqualFold(token, "collate") ||
+		strings.EqualFold(token, "references") ||
+		strings.EqualFold(token, "generated")
+}
+
+func isConflictResolution(token string) bool {
+	return strings.EqualFold(token, "rollback") ||
+		strings.EqualFold(token, "abort") ||
+		strings.EqualFold(token, "fail") ||
+		strings.EqualFold(token, "ignore") ||
+		strings.EqualFold(token, "replace")
 }
 
 // 入力文字列を実行可能なステートメントへ変換する。
@@ -276,10 +478,52 @@ func executeInsert(statement *Statement, table *Table) ExecuteResult {
 			return ExecuteDuplicateKey
 		}
 	}
+	if violatesUniqueConstraint(statement.RowToInsert, table) {
+		return ExecuteConstraintViolation
+	}
 
 	leafNodeInsert(cursor, keyToInsert, statement.RowToInsert)
 
 	return ExecuteSuccess
+}
+
+func violatesUniqueConstraint(row Row, table *Table) bool {
+	for _, column := range table.Schema.Columns {
+		if !column.Unique || column.PrimaryKey {
+			continue
+		}
+
+		value := rowValue(row, column)
+		cursor := tableStart(table)
+		for !cursor.EndOfTable {
+			existingRow := deserializeRow(cursorValue(cursor), table.Schema)
+			if valuesEqual(rowValue(existingRow, column), value) {
+				return true
+			}
+			cursorAdvance(cursor)
+		}
+	}
+
+	return false
+}
+
+func valuesEqual(left Value, right Value) bool {
+	if left.StorageClass != right.StorageClass {
+		return false
+	}
+
+	switch left.StorageClass {
+	case StorageInteger:
+		return left.Integer == right.Integer
+	case StorageReal:
+		return left.Real == right.Real
+	case StorageText:
+		return left.Text == right.Text
+	case StorageNull:
+		return true
+	default:
+		return false
+	}
 }
 
 func executeCreateTable(statement *Statement, table *Table) ExecuteResult {

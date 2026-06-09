@@ -354,6 +354,64 @@ func TestRunCreatesTableAndUsesCustomSchema(t *testing.T) {
 	}
 }
 
+func TestRunCreatesTableWithColumnConstraints(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text not null, code integer unique)",
+		".schema",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > create table people (id integer primary key, name text not null, code integer unique)",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunCreatesTableWithTablePrimaryKeyConstraint(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer, name text, primary key (id))",
+		"insert 1 Alice",
+		"insert 1 Bob",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Error: Duplicate key.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunRejectsDuplicateUniqueColumnValue(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, code integer unique, name text)",
+		"insert 1 100 Alice",
+		"insert 2 100 Bob",
+		"select",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Error: Constraint violation.",
+		"db > (1, 100, Alice)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunSelectsByIDWithCustomSchema(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table people (id integer, name text, height real, weight real)",

@@ -72,11 +72,14 @@ func (affinity TypeAffinity) String() string {
 
 // Column は将来のCREATE TABLEで利用するカラム定義を表す。
 type Column struct {
-	Name         string
-	DeclaredType string
-	Affinity     TypeAffinity
-	MaxLength    uint32
-	PrimaryKey   bool
+	Name                 string
+	DeclaredType         string
+	Affinity             TypeAffinity
+	MaxLength            uint32
+	PrimaryKey           bool
+	PrimaryKeyConstraint bool
+	NotNull              bool
+	Unique               bool
 }
 
 // TableSchema は任意カラムを持つテーブル定義を表す。
@@ -162,6 +165,7 @@ func (schema TableSchema) IsUsable() bool {
 	}
 
 	seenColumns := make(map[string]struct{}, len(schema.Columns))
+	primaryKeyCount := 0
 	for _, column := range schema.Columns {
 		normalizedName := strings.ToLower(strings.TrimSpace(column.Name))
 		if normalizedName == "" {
@@ -174,16 +178,31 @@ func (schema TableSchema) IsUsable() bool {
 		if column.StorageSize() == 0 {
 			return false
 		}
+		if column.PrimaryKey {
+			primaryKeyCount++
+			if column.Affinity != AffinityInteger {
+				return false
+			}
+		}
 	}
 
-	primaryKeyColumn, ok := schema.PrimaryKeyColumn()
-	return ok && strings.EqualFold(primaryKeyColumn.Name, idColumnName)
+	return primaryKeyCount == 1
 }
 
 func (schema TableSchema) CreateStatement() string {
 	columnDefinitions := make([]string, 0, len(schema.Columns))
 	for _, column := range schema.Columns {
-		columnDefinitions = append(columnDefinitions, strings.Join([]string{column.Name, column.DeclaredType}, " "))
+		parts := []string{column.Name, column.DeclaredType}
+		if column.PrimaryKeyConstraint {
+			parts = append(parts, "primary key")
+		}
+		if column.NotNull {
+			parts = append(parts, "not null")
+		}
+		if column.Unique {
+			parts = append(parts, "unique")
+		}
+		columnDefinitions = append(columnDefinitions, strings.Join(parts, " "))
 	}
 
 	return "create table " + schema.Name + " (" + strings.Join(columnDefinitions, ", ") + ")"

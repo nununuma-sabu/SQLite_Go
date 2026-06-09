@@ -81,6 +81,7 @@ const (
 	ExecuteDuplicateKey
 	ExecuteTableFull
 	ExecuteTableNotEmpty
+	ExecuteConstraintViolation
 )
 
 // PrepareResult は入力文字列を実行可能なステートメントへ変換できたかを表す。

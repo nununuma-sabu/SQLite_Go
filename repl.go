@@ -84,6 +84,8 @@ func run(in io.Reader, out io.Writer, table *Table) (code ExitCode) {
 			fmt.Fprintln(out, "Error: Table full.")
 		case ExecuteTableNotEmpty:
 			fmt.Fprintln(out, "Error: Table is not empty.")
+		case ExecuteConstraintViolation:
+			fmt.Fprintln(out, "Error: Constraint violation.")
 		}
 	}
 }
