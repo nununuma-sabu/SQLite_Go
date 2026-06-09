@@ -100,6 +100,63 @@ func TestRunExecutesSelectStatement(t *testing.T) {
 	}
 }
 
+func TestRunExecutesSelectByIDStatement(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"insert 2 bob bob@example.com",
+		"insert 3 carol carol@example.com",
+		"select 2",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (2, bob, bob@example.com)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesSelectByMissingIDStatement(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"select 99",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPrintsSyntaxErrorForInvalidSelectByID(t *testing.T) {
+	got := runTempScript(t, []string{"select abc", ".exit"})
+
+	want := "db > Syntax error. Could not parse statement.\ndb > "
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPrintsErrorForNegativeSelectID(t *testing.T) {
+	got := runTempScript(t, []string{"select -1", ".exit"})
+
+	want := "db > ID must be positive.\ndb > "
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunPrintsAllRowsInMultiLevelTree(t *testing.T) {
 	commands := make([]string, 0, 17)
 	for i := uint32(1); i <= 15; i++ {

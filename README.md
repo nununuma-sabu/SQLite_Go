@@ -126,6 +126,19 @@ Executed.
 db >
 ```
 
+`select <id>` は、指定したIDのレコードだけを表示します。
+
+```text
+db > insert 1 alice alice@example.com
+Executed.
+db > insert 2 bob bob@example.com
+Executed.
+db > select 2
+(2, bob, bob@example.com)
+Executed.
+db >
+```
+
 root leaf nodeが満杯になると、左右のleaf nodeへ分割し、新しいroot internal nodeを作ります。
 
 ```text
@@ -304,8 +317,7 @@ GOCACHE=/tmp/go-build go test ./...
 
 - 削除処理: `delete <id>` を追加し、B-Treeからレコードを取り除けるようにする。
 - 更新処理: `update <id> <username> <email>` を追加し、既存レコードを書き換える。
-- 検索処理: `select <id>` を追加し、B-Tree検索で単一レコードを取得する。
-- 条件付きselect: `select where id = ...` のような最小限の条件式を扱う。
+- 条件付きselect: `select where id = ...` のようなSQL風の条件式を扱う。
 - エラー整理: `panic` で止めている内部エラーを、戻り値や独自エラー型で扱う。
 - DBファイル互換性: ページレイアウトのバージョン情報やマジックヘッダを追加する。
 - ページ再利用: 削除済みページや空きページを管理するfree listを実装する。

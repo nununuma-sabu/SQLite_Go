@@ -6,6 +6,7 @@ import "os"
 type Statement struct {
 	Type        StatementType
 	RowToInsert Row
+	SelectByID  *uint32
 }
 
 // Row は固定スキーマの1レコードを表す。

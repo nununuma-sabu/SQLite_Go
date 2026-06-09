@@ -44,8 +44,26 @@ func prepareStatement(input string, statement *Statement) PrepareResult {
 		return prepareInsert(input, statement)
 	}
 
-	if input == "select" {
+	if strings.HasPrefix(input, "select") {
 		statement.Type = StatementSelect
+		fields := strings.Fields(input)
+		if len(fields) == 1 {
+			return PrepareSuccess
+		}
+		if len(fields) != 2 {
+			return PrepareSyntaxError
+		}
+
+		id, err := strconv.ParseInt(fields[1], 10, 32)
+		if err != nil {
+			return PrepareSyntaxError
+		}
+		if id < 0 {
+			return PrepareNegativeID
+		}
+
+		selectByID := uint32(id)
+		statement.SelectByID = &selectByID
 		return PrepareSuccess
 	}
 
@@ -71,7 +89,16 @@ func executeInsert(statement *Statement, table *Table) ExecuteResult {
 }
 
 // selectステートメントを実行し、保存済みの全行を出力する。
-func executeSelect(table *Table, out io.Writer) ExecuteResult {
+func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteResult {
+	if statement.SelectByID != nil {
+		cursor := tableFind(table, *statement.SelectByID)
+		node := getPage(table.Pager, cursor.PageNum)
+		if cursor.CellNum < leafNodeNumCells(node) && leafNodeKey(node, cursor.CellNum) == *statement.SelectByID {
+			printRow(deserializeRow(cursorValue(cursor)), out)
+		}
+		return ExecuteSuccess
+	}
+
 	cursor := tableStart(table)
 	for !cursor.EndOfTable {
 		printRow(deserializeRow(cursorValue(cursor)), out)
@@ -87,7 +114,7 @@ func executeStatement(statement *Statement, table *Table, out io.Writer) Execute
 	case StatementInsert:
 		return executeInsert(statement, table)
 	case StatementSelect:
-		return executeSelect(table, out)
+		return executeSelect(statement, table, out)
 	}
 
 	return ExecuteSuccess
