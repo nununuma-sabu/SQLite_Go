@@ -156,6 +156,39 @@ func (schema TableSchema) PrimaryKeyColumn() (Column, bool) {
 	return Column{}, false
 }
 
+func (schema TableSchema) IsUsable() bool {
+	if strings.TrimSpace(schema.Name) == "" || len(schema.Columns) == 0 {
+		return false
+	}
+
+	seenColumns := make(map[string]struct{}, len(schema.Columns))
+	for _, column := range schema.Columns {
+		normalizedName := strings.ToLower(strings.TrimSpace(column.Name))
+		if normalizedName == "" {
+			return false
+		}
+		if _, ok := seenColumns[normalizedName]; ok {
+			return false
+		}
+		seenColumns[normalizedName] = struct{}{}
+		if column.StorageSize() == 0 {
+			return false
+		}
+	}
+
+	primaryKeyColumn, ok := schema.PrimaryKeyColumn()
+	return ok && strings.EqualFold(primaryKeyColumn.Name, idColumnName)
+}
+
+func (schema TableSchema) CreateStatement() string {
+	columnDefinitions := make([]string, 0, len(schema.Columns))
+	for _, column := range schema.Columns {
+		columnDefinitions = append(columnDefinitions, strings.Join([]string{column.Name, column.DeclaredType}, " "))
+	}
+
+	return "create table " + schema.Name + " (" + strings.Join(columnDefinitions, ", ") + ")"
+}
+
 func (schema TableSchema) RowLayout() RowLayout {
 	layout := RowLayout{
 		ColumnOffsets: make(map[string]uint32, len(schema.Columns)),

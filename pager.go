@@ -49,9 +49,28 @@ func dbOpen(filename string) (*Table, error) {
 	}
 
 	if pager.NumPages == 0 {
-		rootNode := getPage(pager, 0)
+		table.RootPageNum = defaultRootPageNum
+		table.HasMetadata = true
+		metadataPage := getPage(pager, metadataPageNum)
+		if err := writeDatabaseMetadata(metadataPage, databaseMetadata{Schema: table.Schema}); err != nil {
+			return nil, err
+		}
+
+		rootNode := getPage(pager, table.RootPageNum)
 		initializeLeafNode(rootNode)
 		setNodeRoot(rootNode, true)
+		return table, nil
+	}
+
+	firstPage := getPage(pager, metadataPageNum)
+	if isMetadataPage(firstPage) {
+		metadata, err := readDatabaseMetadata(firstPage)
+		if err != nil {
+			return nil, err
+		}
+		table.RootPageNum = defaultRootPageNum
+		table.Schema = metadata.Schema
+		table.HasMetadata = true
 	}
 
 	return table, nil
@@ -113,6 +132,12 @@ func pagerFlush(pager *Pager, pageNum uint32) error {
 // キャッシュされたページをDBファイルへflushし、ファイルを閉じる。
 func dbClose(table *Table) error {
 	pager := table.Pager
+	if table.HasMetadata {
+		metadataPage := getPage(pager, metadataPageNum)
+		if err := writeDatabaseMetadata(metadataPage, databaseMetadata{Schema: table.Schema}); err != nil {
+			return err
+		}
+	}
 
 	for i := uint32(0); i < pager.NumPages; i++ {
 		if pager.Pages[i] == nil {

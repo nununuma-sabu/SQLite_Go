@@ -20,6 +20,10 @@ func doMetaCommand(input string, table *Table, out io.Writer) MetaCommandResult 
 		printConstants(out)
 		return MetaCommandSuccess
 	}
+	if input == ".schema" {
+		fmt.Fprintln(out, table.Schema.CreateStatement())
+		return MetaCommandSuccess
+	}
 
 	return MetaCommandUnrecognizedCommand
 }

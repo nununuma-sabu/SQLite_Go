@@ -23,9 +23,11 @@ var (
 )
 
 const (
-	pageSize              = 4096
-	tableMaxPages         = 100
-	invalidPageNum uint32 = 1<<32 - 1
+	pageSize                  = 4096
+	tableMaxPages             = 100
+	invalidPageNum     uint32 = 1<<32 - 1
+	metadataPageNum           = 0
+	defaultRootPageNum        = 1
 
 	nodeTypeSize           = 1
 	nodeTypeOffset         = 0

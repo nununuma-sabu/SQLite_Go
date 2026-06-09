@@ -121,6 +121,63 @@ func TestDefaultTableSchemaRowLayout(t *testing.T) {
 	}
 }
 
+func TestTableSchemaIsUsable(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema TableSchema
+		want   bool
+	}{
+		{
+			name:   "default schema is usable",
+			schema: DefaultTableSchema(),
+			want:   true,
+		},
+		{
+			name: "custom schema is usable",
+			schema: TableSchema{
+				Name: "people",
+				Columns: []Column{
+					NewColumn("id", "INTEGER"),
+					NewColumn("name", "TEXT"),
+					NewColumn("height", "REAL"),
+					NewColumn("weight", "REAL"),
+				},
+			},
+			want: true,
+		},
+		{
+			name: "missing id primary key is not usable",
+			schema: TableSchema{
+				Name: "people",
+				Columns: []Column{
+					NewColumn("name", "TEXT"),
+				},
+			},
+			want: false,
+		},
+		{
+			name: "duplicate columns are not usable",
+			schema: TableSchema{
+				Name: "people",
+				Columns: []Column{
+					NewColumn("id", "INTEGER"),
+					NewColumn("name", "TEXT"),
+					NewColumn("Name", "TEXT"),
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.schema.IsUsable(); got != tt.want {
+				t.Fatalf("expected usability %t, got %t", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestColumnValidation(t *testing.T) {
 	idColumn := NewColumn("id", "INTEGER")
 	if !idColumn.ValidateIntegerValue(1) {

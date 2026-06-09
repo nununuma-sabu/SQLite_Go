@@ -78,6 +78,14 @@ LEAF_NODE_MAX_CELLS: 13
 db >
 ```
 
+`.schema` は、現在のテーブルスキーマを `create table` 形式で表示します。
+
+```text
+db > .schema
+create table users (id INTEGER, username TEXT, email TEXT)
+db >
+```
+
 `.btree` は、現在のB-Tree構造を表示します。
 
 ```text
@@ -124,7 +132,7 @@ db >
 注意:
 
 - 既にレコードがあるテーブルに対する `create table` は拒否します。
-- スキーマ定義はまだDBファイルへ保存していません。再起動後はデフォルトスキーマに戻ります。
+- スキーマ定義はDBファイルのメタデータページへ保存します。再起動後も同じスキーマで読み込めます。
 - 1行のサイズが現在のセル値領域である `ROW_SIZE` を超えるスキーマは拒否します。
 
 `insert` で始まる入力は、insertステートメントとして仮実行されます。
@@ -338,6 +346,7 @@ GOCACHE=/tmp/go-build go test ./...
 - `statement.go`: `insert` / `select` のパースと実行
 - `schema.go`: 任意カラム対応に向けた型システムとスキーマ定義
 - `row.go`: 固定スキーマRowのシリアライズと表示
+- `database_metadata.go`: DBファイルに保存するスキーマメタデータ
 - `pager.go`: DBファイルとページキャッシュ
 - `node.go`: B-Treeノードのレイアウトと表示
 - `cursor.go`: B-Tree上の探索位置と走査
@@ -351,18 +360,18 @@ GOCACHE=/tmp/go-build go test ./...
 - 更新処理: `update <id> <username> <email>` を追加し、既存レコードを書き換える。
 - 条件付きselect: `select where id = ...` のようなSQL風の条件式を扱う。
 - エラー整理: `panic` で止めている内部エラーを、戻り値や独自エラー型で扱う。
-- DBファイル互換性: ページレイアウトのバージョン情報やマジックヘッダを追加する。
+- DBファイル互換性: ページレイアウトのバージョン管理と古いDBファイルの移行処理を整理する。
 - ページ再利用: 削除済みページや空きページを管理するfree listを実装する。
-- 可変スキーマ: 固定Rowではなく、簡単な `CREATE TABLE` と型定義を扱う。
+- スキーマ変更: `ALTER TABLE` や既存データを持つテーブルのスキーマ変更を扱う。
 - トランザクション: まずは単純なrollback journalを作り、途中失敗から復旧できるようにする。
 - テスト分割: 実装ファイルに合わせて、B-Tree、Pager、REPLなどのテストファイルも分ける。
-- コマンドライン改善: `.help`、`.schema`、`.pages` などのデバッグ用メタコマンドを追加する。
+- コマンドライン改善: `.help`、`.pages` などのデバッグ用メタコマンドを追加する。
 - ベンチマーク: 大量insert/selectのベンチマークを追加し、B-Treeの挙動を観察する。
 
 ## 型システムのメモ
 
-任意カラム対応に向けて、SQLite風の型システムを `schema.go` に用意しています。
-現在の固定Rowテーブルにも、以下のデフォルトスキーマを適用しています。
+任意カラム対応のため、SQLite風の型システムを `schema.go` に用意しています。
+`CREATE TABLE` を実行しない場合は、以下のデフォルトスキーマを適用します。
 
 | カラム | 宣言型 | affinity | 制約 |
 | --- | --- | --- | --- |
@@ -372,7 +381,7 @@ GOCACHE=/tmp/go-build go test ./...
 
 `insert` と `select <id>` のID検証、`username` / `email` の長さ検証は、このスキーマを参照します。
 保存形式はまだ固定長Rowのままですが、Rowのカラムオフセットとサイズはスキーマから計算する `RowLayout` を使います。
-将来の `CREATE TABLE` 実装で任意カラムへ広げるための接続点になります。
+`CREATE TABLE` で定義したスキーマもこのレイアウト計算を通して保存・復元します。
 
 値そのものの保存形式として、以下のストレージクラスを定義しています。
 

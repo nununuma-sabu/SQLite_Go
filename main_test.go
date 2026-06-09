@@ -313,6 +313,61 @@ func TestRunSelectsByIDWithCustomSchema(t *testing.T) {
 	}
 }
 
+func TestRunKeepsCustomSchemaAfterClosingConnection(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	got := runScript(t, dbPath, []string{
+		"create table people (id integer, name text, height real, weight real)",
+		"insert 1 Alice 165.2 54.3",
+		"insert 2 Bob 172.4 68.1",
+		".exit",
+	})
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+
+	got = runScript(t, dbPath, []string{
+		"select",
+		".exit",
+	})
+	want = strings.Join([]string{
+		"db > (1, Alice, 165.2, 54.3)",
+		"(2, Bob, 172.4, 68.1)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPrintsSchemaAfterClosingConnection(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	runScript(t, dbPath, []string{
+		"create table people (id integer, name text, height real, weight real)",
+		".exit",
+	})
+
+	got := runScript(t, dbPath, []string{
+		".schema",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > create table people (id integer, name text, height real, weight real)",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunRejectsCreateTableWhenTableHasRows(t *testing.T) {
 	got := runTempScript(t, []string{
 		"insert 1 alice alice@example.com",

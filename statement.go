@@ -98,8 +98,7 @@ func parseCreateTable(input string) (TableSchema, bool) {
 		Name:    tableName,
 		Columns: columns,
 	}
-	primaryKeyColumn, ok := schema.PrimaryKeyColumn()
-	if !ok || !strings.EqualFold(primaryKeyColumn.Name, idColumnName) {
+	if !schema.IsUsable() {
 		return TableSchema{}, false
 	}
 
