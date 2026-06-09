@@ -305,6 +305,7 @@ GOCACHE=/tmp/go-build go test ./...
 - `main.go`: エントリーポイント
 - `repl.go`: プロンプト表示と入力ループ
 - `statement.go`: `insert` / `select` のパースと実行
+- `schema.go`: 任意カラム対応に向けた型システムとスキーマ定義
 - `row.go`: 固定スキーマRowのシリアライズと表示
 - `pager.go`: DBファイルとページキャッシュ
 - `node.go`: B-Treeノードのレイアウトと表示
@@ -326,6 +327,29 @@ GOCACHE=/tmp/go-build go test ./...
 - テスト分割: 実装ファイルに合わせて、B-Tree、Pager、REPLなどのテストファイルも分ける。
 - コマンドライン改善: `.help`、`.schema`、`.pages` などのデバッグ用メタコマンドを追加する。
 - ベンチマーク: 大量insert/selectのベンチマークを追加し、B-Treeの挙動を観察する。
+
+## 型システムのメモ
+
+任意カラム対応に向けて、SQLite風の型システムを `schema.go` に用意しています。
+現時点では既存の固定Row保存形式にはまだ接続しておらず、将来の `CREATE TABLE` 実装で使うための土台です。
+
+値そのものの保存形式として、以下のストレージクラスを定義しています。
+
+- `NULL`
+- `INTEGER`
+- `REAL`
+- `TEXT`
+- `BLOB`
+
+カラム宣言からは、SQLiteに近い順序で型アフィニティを推定します。
+
+- `INT` を含む型名: `INTEGER`
+- `CHAR` / `CLOB` / `TEXT` を含む型名: `TEXT`
+- `BLOB` または型指定なし: `BLOB`
+- `REAL` / `FLOA` / `DOUB` を含む型名: `REAL`
+- それ以外: `NUMERIC`
+
+BooleanやDate/Time専用型は持たず、SQLite同様に `NUMERIC` affinityとして扱います。
 
 ## ビルドして実行する方法
 
