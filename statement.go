@@ -7,7 +7,7 @@ import (
 )
 
 // insert入力をRow付きのステートメントへ変換する。
-func prepareInsert(input string, statement *Statement) PrepareResult {
+func prepareInsert(input string, statement *Statement, schema TableSchema) PrepareResult {
 	statement.Type = StatementInsert
 
 	fields := strings.Fields(input)
@@ -19,13 +19,19 @@ func prepareInsert(input string, statement *Statement) PrepareResult {
 	if err != nil {
 		return PrepareSyntaxError
 	}
-	if id < 0 {
+	idColumn, ok := schema.Column(idColumnName)
+	if !ok || !idColumn.ValidateIntegerValue(id) {
 		return PrepareNegativeID
 	}
 
 	username := fields[2]
 	email := fields[3]
-	if len(username) > columnUsernameSize || len(email) > columnEmailSize {
+	usernameColumn, ok := schema.Column(usernameColumnName)
+	if !ok || !usernameColumn.ValidateTextValue(username) {
+		return PrepareStringTooLong
+	}
+	emailColumn, ok := schema.Column(emailColumnName)
+	if !ok || !emailColumn.ValidateTextValue(email) {
 		return PrepareStringTooLong
 	}
 
@@ -39,9 +45,9 @@ func prepareInsert(input string, statement *Statement) PrepareResult {
 }
 
 // 入力文字列を実行可能なステートメントへ変換する。
-func prepareStatement(input string, statement *Statement) PrepareResult {
+func prepareStatement(input string, statement *Statement, schema TableSchema) PrepareResult {
 	if strings.HasPrefix(input, "insert") {
-		return prepareInsert(input, statement)
+		return prepareInsert(input, statement, schema)
 	}
 
 	if strings.HasPrefix(input, "select") {
@@ -58,7 +64,8 @@ func prepareStatement(input string, statement *Statement) PrepareResult {
 		if err != nil {
 			return PrepareSyntaxError
 		}
-		if id < 0 {
+		idColumn, ok := schema.PrimaryKeyColumn()
+		if !ok || !idColumn.ValidateIntegerValue(id) {
 			return PrepareNegativeID
 		}
 

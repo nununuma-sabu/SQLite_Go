@@ -56,7 +56,7 @@ func run(in io.Reader, out io.Writer, table *Table) (code ExitCode) {
 		}
 
 		var statement Statement
-		switch prepareStatement(input, &statement) {
+		switch prepareStatement(input, &statement, table.Schema) {
 		case PrepareSuccess:
 		case PrepareNegativeID:
 			fmt.Fprintln(out, "ID must be positive.")

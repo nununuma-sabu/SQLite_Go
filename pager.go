@@ -45,6 +45,7 @@ func dbOpen(filename string) (*Table, error) {
 	table := &Table{
 		Pager:       pager,
 		RootPageNum: 0,
+		Schema:      DefaultTableSchema(),
 	}
 
 	if pager.NumPages == 0 {

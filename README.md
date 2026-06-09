@@ -331,7 +331,16 @@ GOCACHE=/tmp/go-build go test ./...
 ## 型システムのメモ
 
 任意カラム対応に向けて、SQLite風の型システムを `schema.go` に用意しています。
-現時点では既存の固定Row保存形式にはまだ接続しておらず、将来の `CREATE TABLE` 実装で使うための土台です。
+現在の固定Rowテーブルにも、以下のデフォルトスキーマを適用しています。
+
+| カラム | 宣言型 | affinity | 制約 |
+| --- | --- | --- | --- |
+| `id` | `INTEGER` | `INTEGER` | primary key、0以上 |
+| `username` | `TEXT` | `TEXT` | 32文字以内 |
+| `email` | `TEXT` | `TEXT` | 255文字以内 |
+
+`insert` と `select <id>` のID検証、`username` / `email` の長さ検証は、このスキーマを参照します。
+保存形式はまだ固定長Rowのままですが、将来の `CREATE TABLE` 実装で任意カラムへ広げるための接続点になります。
 
 値そのものの保存形式として、以下のストレージクラスを定義しています。
 

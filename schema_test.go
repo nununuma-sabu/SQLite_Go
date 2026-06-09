@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestInferTypeAffinity(t *testing.T) {
 	tests := []struct {
@@ -41,6 +44,69 @@ func TestNewColumnSetsAffinity(t *testing.T) {
 	}
 	if column.Affinity != AffinityInteger {
 		t.Fatalf("expected affinity %s, got %s", AffinityInteger, column.Affinity)
+	}
+}
+
+func TestDefaultTableSchema(t *testing.T) {
+	schema := DefaultTableSchema()
+
+	if schema.Name != defaultTableName {
+		t.Fatalf("expected schema name %q, got %q", defaultTableName, schema.Name)
+	}
+	if len(schema.Columns) != 3 {
+		t.Fatalf("expected 3 columns, got %d", len(schema.Columns))
+	}
+
+	idColumn, ok := schema.PrimaryKeyColumn()
+	if !ok {
+		t.Fatal("expected primary key column")
+	}
+	if idColumn.Name != idColumnName {
+		t.Fatalf("expected primary key %q, got %q", idColumnName, idColumn.Name)
+	}
+	if idColumn.Affinity != AffinityInteger {
+		t.Fatalf("expected id affinity %s, got %s", AffinityInteger, idColumn.Affinity)
+	}
+
+	usernameColumn, ok := schema.Column(usernameColumnName)
+	if !ok {
+		t.Fatalf("expected column %q", usernameColumnName)
+	}
+	if usernameColumn.Affinity != AffinityText {
+		t.Fatalf("expected username affinity %s, got %s", AffinityText, usernameColumn.Affinity)
+	}
+	if usernameColumn.MaxLength != columnUsernameSize {
+		t.Fatalf("expected username max length %d, got %d", columnUsernameSize, usernameColumn.MaxLength)
+	}
+
+	emailColumn, ok := schema.Column(emailColumnName)
+	if !ok {
+		t.Fatalf("expected column %q", emailColumnName)
+	}
+	if emailColumn.Affinity != AffinityText {
+		t.Fatalf("expected email affinity %s, got %s", AffinityText, emailColumn.Affinity)
+	}
+	if emailColumn.MaxLength != columnEmailSize {
+		t.Fatalf("expected email max length %d, got %d", columnEmailSize, emailColumn.MaxLength)
+	}
+}
+
+func TestColumnValidation(t *testing.T) {
+	idColumn := NewColumn("id", "INTEGER")
+	if !idColumn.ValidateIntegerValue(1) {
+		t.Fatal("expected positive integer to be valid")
+	}
+	if idColumn.ValidateIntegerValue(-1) {
+		t.Fatal("expected negative integer to be invalid")
+	}
+
+	usernameColumn := NewColumn("username", "TEXT")
+	usernameColumn.MaxLength = columnUsernameSize
+	if !usernameColumn.ValidateTextValue("alice") {
+		t.Fatal("expected text within limit to be valid")
+	}
+	if usernameColumn.ValidateTextValue(strings.Repeat("a", columnUsernameSize+1)) {
+		t.Fatal("expected text over limit to be invalid")
 	}
 }
 

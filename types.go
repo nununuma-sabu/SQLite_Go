@@ -20,6 +20,7 @@ type Row struct {
 type Table struct {
 	Pager       *Pager
 	RootPageNum uint32
+	Schema      TableSchema
 }
 
 // Cursor はテーブル内の現在位置を表す。

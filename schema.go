@@ -2,6 +2,16 @@ package main
 
 import "strings"
 
+const (
+	defaultTableName     = "users"
+	idColumnName         = "id"
+	usernameColumnName   = "username"
+	emailColumnName      = "email"
+	idDeclaredType       = "INTEGER"
+	usernameDeclaredType = "TEXT"
+	emailDeclaredType    = "TEXT"
+)
+
 // StorageClass は値そのものの保存形式を表す。
 // SQLiteのManifest Typingに近く、カラムではなく値に結びつく型として扱う。
 type StorageClass int
@@ -65,6 +75,8 @@ type Column struct {
 	Name         string
 	DeclaredType string
 	Affinity     TypeAffinity
+	MaxLength    uint32
+	PrimaryKey   bool
 }
 
 // TableSchema は任意カラムを持つテーブル定義を表す。
@@ -80,6 +92,68 @@ func NewColumn(name string, declaredType string) Column {
 		DeclaredType: declaredType,
 		Affinity:     InferTypeAffinity(declaredType),
 	}
+}
+
+// DefaultTableSchema は現在の固定Row実装に対応するスキーマを返す。
+func DefaultTableSchema() TableSchema {
+	return TableSchema{
+		Name: defaultTableName,
+		Columns: []Column{
+			{
+				Name:         idColumnName,
+				DeclaredType: idDeclaredType,
+				Affinity:     InferTypeAffinity(idDeclaredType),
+				PrimaryKey:   true,
+			},
+			{
+				Name:         usernameColumnName,
+				DeclaredType: usernameDeclaredType,
+				Affinity:     InferTypeAffinity(usernameDeclaredType),
+				MaxLength:    columnUsernameSize,
+			},
+			{
+				Name:         emailColumnName,
+				DeclaredType: emailDeclaredType,
+				Affinity:     InferTypeAffinity(emailDeclaredType),
+				MaxLength:    columnEmailSize,
+			},
+		},
+	}
+}
+
+func (schema TableSchema) Column(name string) (Column, bool) {
+	for _, column := range schema.Columns {
+		if strings.EqualFold(column.Name, name) {
+			return column, true
+		}
+	}
+
+	return Column{}, false
+}
+
+func (schema TableSchema) PrimaryKeyColumn() (Column, bool) {
+	for _, column := range schema.Columns {
+		if column.PrimaryKey {
+			return column, true
+		}
+	}
+
+	return Column{}, false
+}
+
+func (column Column) ValidateIntegerValue(value int64) bool {
+	return column.Affinity == AffinityInteger && value >= 0
+}
+
+func (column Column) ValidateTextValue(value string) bool {
+	if column.Affinity != AffinityText {
+		return false
+	}
+	if column.MaxLength == 0 {
+		return true
+	}
+
+	return uint32(len(value)) <= column.MaxLength
 }
 
 // InferTypeAffinity はSQLiteの型名解釈に近い順序で型アフィニティを推定する。
