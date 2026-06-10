@@ -39,6 +39,23 @@ func runTempScript(t *testing.T, commands []string) string {
 	return runScript(t, filepath.Join(t.TempDir(), "test.db"), commands)
 }
 
+func runTempSQLScript(t *testing.T, script string) string {
+	t.Helper()
+
+	table, err := dbOpen(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+
+	var out bytes.Buffer
+	code := runSQLScript(strings.NewReader(script), &out, table)
+	if code != ExitSuccess {
+		t.Fatalf("expected exit code %d, got %d", ExitSuccess, code)
+	}
+
+	return out.String()
+}
+
 func defaultRow(id uint32, username string, email string) Row {
 	return Row{
 		Values: map[string]Value{
@@ -101,6 +118,41 @@ func TestRunExecutesInsertStatement(t *testing.T) {
 	got := runTempScript(t, []string{"insert 1 user user@example.com", ".exit"})
 
 	want := "db > Executed.\ndb > "
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunSQLScriptExecutesSemicolonSeparatedStatements(t *testing.T) {
+	got := runTempSQLScript(t, `
+-- setup
+create table people (
+  id integer primary key,
+  name text,
+  note text
+);
+insert 1 'Alice; A' 'keeps -- text';
+insert 2 Bob null;
+SELECT name, note FROM people;
+`)
+
+	want := strings.Join([]string{
+		"Executed.",
+		"Executed.",
+		"Executed.",
+		"(Alice; A, keeps -- text)",
+		"(Bob, NULL)",
+		"Executed.",
+	}, "\n") + "\n"
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunSQLScriptPrintsSyntaxErrorForUnterminatedString(t *testing.T) {
+	got := runTempSQLScript(t, "insert 1 'alice;")
+
+	want := "Syntax error. Could not parse statement.\n"
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}

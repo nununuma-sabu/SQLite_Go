@@ -1,5 +1,29 @@
 # 使い方
 
+## SQLファイルの実行
+
+DBファイル名の後ろにSQLファイルを指定すると、ファイル内のSQLをセミコロン区切りで実行します。
+このモードではREPLの `db >` プロンプトは表示しません。
+
+```bash
+go run . test.db setup.sql
+```
+
+例:
+
+```sql
+-- setup.sql
+create table people (
+  id integer primary key,
+  name text,
+  height real
+);
+
+insert 1 Alice 165.2;
+insert 2 Bob 172.4;
+select name, height from people;
+```
+
 ## CREATE TABLE
 
 空のテーブルに対してカラム定義を設定します。

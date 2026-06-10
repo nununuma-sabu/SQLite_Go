@@ -40,6 +40,12 @@ go build -buildvcs=false -o sqlite-go .
 ./sqlite-go test.db
 ```
 
+SQLファイルを実行する場合は、DBファイル名の後ろにSQLファイルを指定します。
+
+```bash
+go run . test.db setup.sql
+```
+
 ## クイック例
 
 ```text
