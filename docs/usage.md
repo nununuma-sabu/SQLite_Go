@@ -114,14 +114,18 @@ Executed.
 db >
 ```
 
-`where` で単一条件を指定できます。
+`where` で条件を指定できます。
 対応している条件は `=`、`!=`、`<>`、`<`、`<=`、`>`、`>=`、`is null`、`is not null` です。
+複数条件は `and` でつなげます。
 
 ```text
 db > select username, email from users where id = 2;
 (bob, bob@example.com)
 Executed.
 db > select username from users where id >= 2;
+(bob)
+Executed.
+db > select username from users where id >= 2 and email is not null;
 (bob)
 Executed.
 db > select id from users where email is not null;

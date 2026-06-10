@@ -459,7 +459,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 
 type selectClause struct {
 	Columns []Column
-	Where   *WhereCondition
+	Where   []WhereCondition
 }
 
 func parseSelectStatement(input string, schema TableSchema) (selectClause, PrepareResult) {
@@ -482,18 +482,18 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	tableAndWhere := strings.TrimSpace(body[fromIndex+len(" from "):])
 	whereIndex := findSelectWhereIndex(tableAndWhere)
 	tableName := tableAndWhere
-	var where *WhereCondition
+	var where []WhereCondition
 	if whereIndex >= 0 {
 		tableName = strings.TrimSpace(tableAndWhere[:whereIndex])
 		whereInput := strings.TrimSpace(tableAndWhere[whereIndex+len(" where "):])
 		if whereInput == "" {
 			return selectClause{}, PrepareSyntaxError
 		}
-		condition, result := parseWhereCondition(whereInput, schema)
+		conditions, result := parseWhereConditions(whereInput, schema)
 		if result != PrepareSuccess {
 			return selectClause{}, result
 		}
-		where = &condition
+		where = conditions
 	}
 	if columnList == "" || tableName == "" || !strings.EqualFold(tableName, schema.Name) {
 		return selectClause{}, PrepareSyntaxError
@@ -561,6 +561,59 @@ func findSelectWhereIndex(body string) int {
 	}
 
 	return -1
+}
+
+func parseWhereConditions(input string, schema TableSchema) ([]WhereCondition, PrepareResult) {
+	parts, ok := splitWhereAndConditions(input)
+	if !ok {
+		return nil, PrepareSyntaxError
+	}
+
+	conditions := make([]WhereCondition, 0, len(parts))
+	for _, part := range parts {
+		condition, result := parseWhereCondition(part, schema)
+		if result != PrepareSuccess {
+			return nil, result
+		}
+		conditions = append(conditions, condition)
+	}
+
+	return conditions, PrepareSuccess
+}
+
+func splitWhereAndConditions(input string) ([]string, bool) {
+	conditions := []string{}
+	start := 0
+	inString := false
+	for i := 0; i < len(input); i++ {
+		if input[i] == '\'' {
+			if inString && i+1 < len(input) && input[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if !inString && i+len(" and ") <= len(input) && strings.EqualFold(input[i:i+len(" and ")], " and ") {
+			condition := strings.TrimSpace(input[start:i])
+			if condition == "" {
+				return nil, false
+			}
+			conditions = append(conditions, condition)
+			start = i + len(" and ")
+			i = start - 1
+		}
+	}
+	if inString {
+		return nil, false
+	}
+
+	condition := strings.TrimSpace(input[start:])
+	if condition == "" {
+		return nil, false
+	}
+
+	return append(conditions, condition), true
 }
 
 func parseWhereCondition(input string, schema TableSchema) (WhereCondition, PrepareResult) {
@@ -865,11 +918,21 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	return ExecuteSuccess
 }
 
-func rowMatchesWhere(row Row, condition *WhereCondition) bool {
-	if condition == nil {
+func rowMatchesWhere(row Row, conditions []WhereCondition) bool {
+	if len(conditions) == 0 {
 		return true
 	}
 
+	for _, condition := range conditions {
+		if !rowMatchesCondition(row, condition) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func rowMatchesCondition(row Row, condition WhereCondition) bool {
 	value := rowValue(row, condition.Column)
 	switch condition.Operator {
 	case WhereEqual:

@@ -17,3 +17,5 @@ select name from people where height < 170;
 select id from people where name > 'Alice';
 select id from people where nickname is null;
 select id from people where nickname is not null;
+select name from people where id >= 2 and height < 180;
+select name from people where nickname is null and height < 160;

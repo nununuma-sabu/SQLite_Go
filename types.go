@@ -8,7 +8,7 @@ type Statement struct {
 	RowToInsert   Row
 	SelectByKey   *uint32
 	SelectColumns []Column
-	SelectWhere   *WhereCondition
+	SelectWhere   []WhereCondition
 	Schema        TableSchema
 }
 
