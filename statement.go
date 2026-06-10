@@ -429,6 +429,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 			statement.SelectColumns = selectClause.Columns
 			statement.SelectWhere = selectClause.Where
 			statement.SelectOrderBy = selectClause.OrderBy
+			statement.SelectLimit = selectClause.Limit
 			return PrepareSuccess
 		}
 
@@ -463,6 +464,7 @@ type selectClause struct {
 	Columns []Column
 	Where   WhereExpression
 	OrderBy *OrderByClause
+	Limit   *uint32
 }
 
 func parseSelectStatement(input string, schema TableSchema) (selectClause, PrepareResult) {
@@ -482,7 +484,20 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	}
 
 	columnList := strings.TrimSpace(body[:fromIndex])
-	tableWhereAndOrder := strings.TrimSpace(body[fromIndex+len(" from "):])
+	tableWhereOrderAndLimit := strings.TrimSpace(body[fromIndex+len(" from "):])
+	limitIndex := findSelectLimitIndex(tableWhereOrderAndLimit)
+	tableWhereAndOrder := tableWhereOrderAndLimit
+	var limit *uint32
+	if limitIndex >= 0 {
+		tableWhereAndOrder = strings.TrimSpace(tableWhereOrderAndLimit[:limitIndex])
+		limitInput := strings.TrimSpace(tableWhereOrderAndLimit[limitIndex+len(" limit "):])
+		parsedLimit, result := parseLimitClause(limitInput)
+		if result != PrepareSuccess {
+			return selectClause{}, result
+		}
+		limit = &parsedLimit
+	}
+
 	orderByIndex := findSelectOrderByIndex(tableWhereAndOrder)
 	tableAndWhere := tableWhereAndOrder
 	var orderBy *OrderByClause
@@ -519,7 +534,7 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	}
 
 	if columnList == "*" {
-		return selectClause{Columns: schema.Columns, Where: where, OrderBy: orderBy}, PrepareSuccess
+		return selectClause{Columns: schema.Columns, Where: where, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 	}
 
 	columnNames, ok := splitSQLList(columnList)
@@ -539,7 +554,7 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		columns = append(columns, column)
 	}
 
-	return selectClause{Columns: columns, Where: where, OrderBy: orderBy}, PrepareSuccess
+	return selectClause{Columns: columns, Where: where, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 }
 
 func findSelectFromIndex(body string) int {
@@ -600,6 +615,40 @@ func findSelectOrderByIndex(body string) int {
 	}
 
 	return -1
+}
+
+func findSelectLimitIndex(body string) int {
+	lower := strings.ToLower(body)
+	inString := false
+	for i := 0; i <= len(lower)-len(" limit "); i++ {
+		if body[i] == '\'' {
+			if inString && i+1 < len(body) && body[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if !inString && strings.HasPrefix(lower[i:], " limit ") {
+			return i
+		}
+	}
+
+	return -1
+}
+
+func parseLimitClause(input string) (uint32, PrepareResult) {
+	fields := strings.Fields(input)
+	if len(fields) != 1 {
+		return 0, PrepareSyntaxError
+	}
+
+	limit, err := strconv.ParseUint(fields[0], 10, 32)
+	if err != nil {
+		return 0, PrepareSyntaxError
+	}
+
+	return uint32(limit), PrepareSuccess
 }
 
 func parseOrderByClause(input string, schema TableSchema) (OrderByClause, PrepareResult) {
@@ -1056,6 +1105,7 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	if statement.SelectOrderBy != nil {
 		rows := selectRows(statement, table)
 		sortRows(rows, *statement.SelectOrderBy)
+		rows = limitRows(rows, statement.SelectLimit)
 		for _, row := range rows {
 			printColumns(row, columns, out)
 		}
@@ -1075,15 +1125,38 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	}
 
 	cursor := tableStart(table)
+	printed := uint32(0)
 	for !cursor.EndOfTable {
 		row := deserializeRow(cursorValue(cursor), table.Schema)
 		if rowMatchesWhere(row, statement.SelectWhere) {
+			if reachedLimit(printed, statement.SelectLimit) {
+				break
+			}
 			printColumns(row, columns, out)
+			printed++
 		}
 		cursorAdvance(cursor)
 	}
 
 	return ExecuteSuccess
+}
+
+func limitRows(rows []Row, limit *uint32) []Row {
+	if limit == nil {
+		return rows
+	}
+	if *limit == 0 {
+		return nil
+	}
+	if uint32(len(rows)) <= *limit {
+		return rows
+	}
+
+	return rows[:*limit]
+}
+
+func reachedLimit(count uint32, limit *uint32) bool {
+	return limit != nil && count >= *limit
 }
 
 func selectRows(statement *Statement, table *Table) []Row {

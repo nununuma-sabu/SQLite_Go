@@ -25,3 +25,5 @@ select name from people where (id = 1 or id = 2) and height < 170;
 select name from people where (nickname is null and height < 160) or name = Bob;
 select name, height from people order by height asc;
 select name from people where id = 1 or height < 170 order by height desc;
+select name from people limit 2;
+select name from people order by height desc limit 2;

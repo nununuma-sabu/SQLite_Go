@@ -523,6 +523,62 @@ func TestRunExecutesSelectWhereOrderBy(t *testing.T) {
 	}
 }
 
+func TestRunExecutesSelectLimit(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"insert 2 bob bob@example.com",
+		"insert 3 carol carol@example.com",
+		"SELECT username FROM users LIMIT 2;",
+		"SELECT username FROM users WHERE id >= 2 LIMIT 1;",
+		"SELECT username FROM users LIMIT 0;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (alice)",
+		"(bob)",
+		"Executed.",
+		"db > (bob)",
+		"Executed.",
+		"db > Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesSelectOrderByLimit(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real)",
+		"insert 1 Alice 165.2",
+		"insert 2 Bob 172.4",
+		"insert 3 Carol 158.9",
+		"SELECT name FROM people ORDER BY height DESC LIMIT 2;",
+		"SELECT name FROM people WHERE id = 1 OR height < 170 ORDER BY height ASC LIMIT 1;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (Bob)",
+		"(Alice)",
+		"Executed.",
+		"db > (Carol)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesSelectColumnsFromCustomTable(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table tbl1 (id integer primary key, column1 text, column2 real)",
@@ -555,10 +611,14 @@ func TestRunPrintsSyntaxErrorForInvalidSelectFrom(t *testing.T) {
 		"SELECT * FROM users WHERE id = 1);",
 		"SELECT * FROM users ORDER BY missing;",
 		"SELECT * FROM users ORDER BY id SIDEWAYS;",
+		"SELECT * FROM users LIMIT -1;",
+		"SELECT * FROM users LIMIT 1 2;",
 		".exit",
 	})
 
 	want := strings.Join([]string{
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",

@@ -10,6 +10,7 @@ type Statement struct {
 	SelectColumns []Column
 	SelectWhere   WhereExpression
 	SelectOrderBy *OrderByClause
+	SelectLimit   *uint32
 	Schema        TableSchema
 }
 

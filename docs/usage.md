@@ -160,6 +160,16 @@ Executed.
 db >
 ```
 
+`limit` で表示する件数を制限できます。
+`order by` と組み合わせた場合は、並び替え後の先頭から指定件数を表示します。
+
+```text
+db > select username from users order by id desc limit 1;
+(bob)
+Executed.
+db >
+```
+
 `select <id>` は指定したIDのレコードだけを表示します。
 
 ```text
