@@ -12,14 +12,12 @@ type Statement struct {
 	Schema        TableSchema
 }
 
-// WhereExpression はORで区切られたWHERE条件グループを表す。
+// WhereExpression はWHERE条件式を表す。
 type WhereExpression struct {
-	Groups []WhereConditionGroup
-}
-
-// WhereConditionGroup はANDでつながるWHERE条件を表す。
-type WhereConditionGroup struct {
-	Conditions []WhereCondition
+	Kind      WhereExpressionKind
+	Condition WhereCondition
+	Left      *WhereExpression
+	Right     *WhereExpression
 }
 
 // WhereCondition はSELECTの単一WHERE条件を表す。
@@ -28,6 +26,16 @@ type WhereCondition struct {
 	Operator WhereOperator
 	Value    Value
 }
+
+// WhereExpressionKind はWHERE条件式の種類を表す。
+type WhereExpressionKind int
+
+const (
+	WhereExpressionNone WhereExpressionKind = iota
+	WhereExpressionCondition
+	WhereExpressionAnd
+	WhereExpressionOr
+)
 
 // WhereOperator はWHERE条件で使える比較演算子を表す。
 type WhereOperator int

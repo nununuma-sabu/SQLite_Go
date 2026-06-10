@@ -21,3 +21,5 @@ select name from people where id >= 2 and height < 180;
 select name from people where nickname is null and height < 160;
 select name from people where id = 1 or height < 160;
 select name from people where id = 1 or id = 2 and height < 170;
+select name from people where (id = 1 or id = 2) and height < 170;
+select name from people where (nickname is null and height < 160) or name = Bob;

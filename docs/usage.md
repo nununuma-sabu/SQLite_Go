@@ -118,6 +118,7 @@ db >
 対応している条件は `=`、`!=`、`<>`、`<`、`<=`、`>`、`>=`、`is null`、`is not null` です。
 複数条件は `and` / `or` でつなげます。
 `and` は `or` より先に評価します。
+括弧で条件式の評価順を指定できます。
 
 ```text
 db > select username, email from users where id = 2;
@@ -130,6 +131,10 @@ db > select username from users where id >= 2 and email is not null;
 (bob)
 Executed.
 db > select username from users where id = 1 or id = 2;
+(alice)
+(bob)
+Executed.
+db > select username from users where (id = 1 or id = 2) and email is not null;
 (alice)
 (bob)
 Executed.

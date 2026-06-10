@@ -564,102 +564,176 @@ func findSelectWhereIndex(body string) int {
 }
 
 func parseWhereExpression(input string, schema TableSchema) (WhereExpression, PrepareResult) {
-	orParts, ok := splitWhereConditions(input, "or")
-	if !ok {
+	tokens, ok := parseWhereTokens(input)
+	if !ok || len(tokens) == 0 {
 		return WhereExpression{}, PrepareSyntaxError
 	}
 
-	groups := make([]WhereConditionGroup, 0, len(orParts))
-	for _, orPart := range orParts {
-		andParts, ok := splitWhereConditions(orPart, "and")
-		if !ok {
+	parser := whereExpressionParser{Tokens: tokens, Schema: schema}
+	expression, result := parser.parseOr()
+	if result != PrepareSuccess || parser.Position != len(tokens) {
+		return WhereExpression{}, PrepareSyntaxError
+	}
+
+	return expression, PrepareSuccess
+}
+
+type whereExpressionParser struct {
+	Tokens   []insertField
+	Position int
+	Schema   TableSchema
+}
+
+func (parser *whereExpressionParser) parseOr() (WhereExpression, PrepareResult) {
+	left, result := parser.parseAnd()
+	if result != PrepareSuccess {
+		return WhereExpression{}, result
+	}
+
+	for parser.matchKeyword("or") {
+		right, result := parser.parseAnd()
+		if result != PrepareSuccess {
+			return WhereExpression{}, result
+		}
+		leftNode := left
+		rightNode := right
+		left = WhereExpression{
+			Kind:  WhereExpressionOr,
+			Left:  &leftNode,
+			Right: &rightNode,
+		}
+	}
+
+	return left, PrepareSuccess
+}
+
+func (parser *whereExpressionParser) parseAnd() (WhereExpression, PrepareResult) {
+	left, result := parser.parsePrimary()
+	if result != PrepareSuccess {
+		return WhereExpression{}, result
+	}
+
+	for parser.matchKeyword("and") {
+		right, result := parser.parsePrimary()
+		if result != PrepareSuccess {
+			return WhereExpression{}, result
+		}
+		leftNode := left
+		rightNode := right
+		left = WhereExpression{
+			Kind:  WhereExpressionAnd,
+			Left:  &leftNode,
+			Right: &rightNode,
+		}
+	}
+
+	return left, PrepareSuccess
+}
+
+func (parser *whereExpressionParser) parsePrimary() (WhereExpression, PrepareResult) {
+	if parser.matchValue("(") {
+		expression, result := parser.parseOr()
+		if result != PrepareSuccess || !parser.matchValue(")") {
 			return WhereExpression{}, PrepareSyntaxError
 		}
-
-		conditions := make([]WhereCondition, 0, len(andParts))
-		for _, andPart := range andParts {
-			condition, result := parseWhereCondition(andPart, schema)
-			if result != PrepareSuccess {
-				return WhereExpression{}, result
-			}
-			conditions = append(conditions, condition)
-		}
-		groups = append(groups, WhereConditionGroup{Conditions: conditions})
+		return expression, PrepareSuccess
 	}
 
-	return WhereExpression{Groups: groups}, PrepareSuccess
+	condition, result := parser.parseCondition()
+	if result != PrepareSuccess {
+		return WhereExpression{}, result
+	}
+
+	return WhereExpression{Kind: WhereExpressionCondition, Condition: condition}, PrepareSuccess
 }
 
-func splitWhereConditions(input string, operator string) ([]string, bool) {
-	separator := " " + operator + " "
-	conditions := []string{}
-	start := 0
-	inString := false
-	for i := 0; i < len(input); i++ {
-		if input[i] == '\'' {
-			if inString && i+1 < len(input) && input[i+1] == '\'' {
-				i++
-				continue
-			}
-			inString = !inString
-			continue
-		}
-		if !inString && i+len(separator) <= len(input) && strings.EqualFold(input[i:i+len(separator)], separator) {
-			condition := strings.TrimSpace(input[start:i])
-			if condition == "" {
-				return nil, false
-			}
-			conditions = append(conditions, condition)
-			start = i + len(separator)
-			i = start - 1
-		}
-	}
-	if inString {
-		return nil, false
-	}
-
-	condition := strings.TrimSpace(input[start:])
-	if condition == "" {
-		return nil, false
-	}
-
-	return append(conditions, condition), true
-}
-
-func parseWhereCondition(input string, schema TableSchema) (WhereCondition, PrepareResult) {
-	tokens, ok := parseWhereTokens(input)
-	if !ok || len(tokens) < 3 {
+func (parser *whereExpressionParser) parseCondition() (WhereCondition, PrepareResult) {
+	columnToken, ok := parser.consume()
+	if !ok || columnToken.Quoted || isWhereReservedToken(columnToken.Value) {
 		return WhereCondition{}, PrepareSyntaxError
 	}
 
-	column, ok := schema.Column(tokens[0].Value)
+	column, ok := parser.Schema.Column(columnToken.Value)
 	if !ok {
 		return WhereCondition{}, PrepareSyntaxError
 	}
 
-	if strings.EqualFold(tokens[1].Value, "is") {
-		if len(tokens) == 3 && strings.EqualFold(tokens[2].Value, "null") {
+	operatorToken, ok := parser.consume()
+	if !ok || operatorToken.Quoted {
+		return WhereCondition{}, PrepareSyntaxError
+	}
+
+	if strings.EqualFold(operatorToken.Value, "is") {
+		nextToken, ok := parser.consume()
+		if ok && !nextToken.Quoted && strings.EqualFold(nextToken.Value, "null") {
 			return WhereCondition{Column: column, Operator: WhereIsNull}, PrepareSuccess
 		}
-		if len(tokens) == 4 && strings.EqualFold(tokens[2].Value, "not") && strings.EqualFold(tokens[3].Value, "null") {
-			return WhereCondition{Column: column, Operator: WhereIsNotNull}, PrepareSuccess
+		if ok && !nextToken.Quoted && strings.EqualFold(nextToken.Value, "not") {
+			nullToken, ok := parser.consume()
+			if ok && !nullToken.Quoted && strings.EqualFold(nullToken.Value, "null") {
+				return WhereCondition{Column: column, Operator: WhereIsNotNull}, PrepareSuccess
+			}
 		}
 		return WhereCondition{}, PrepareSyntaxError
 	}
 
-	operator, ok := parseWhereComparisonOperator(tokens[1].Value)
-	if !ok || len(tokens) != 3 {
+	operator, ok := parseWhereComparisonOperator(operatorToken.Value)
+	if !ok {
 		return WhereCondition{}, PrepareSyntaxError
 	}
-	if !tokens[2].Quoted && strings.EqualFold(tokens[2].Value, "null") {
+	valueToken, ok := parser.consume()
+	if !ok || isWhereReservedToken(valueToken.Value) {
 		return WhereCondition{}, PrepareSyntaxError
 	}
-	value, result := parseColumnValue(tokens[2], column)
+	if !valueToken.Quoted && strings.EqualFold(valueToken.Value, "null") {
+		return WhereCondition{}, PrepareSyntaxError
+	}
+	value, result := parseColumnValue(valueToken, column)
 	if result != PrepareSuccess {
 		return WhereCondition{}, result
 	}
 
 	return WhereCondition{Column: column, Operator: operator, Value: value}, PrepareSuccess
+}
+
+func (parser *whereExpressionParser) consume() (insertField, bool) {
+	if parser.Position >= len(parser.Tokens) {
+		return insertField{}, false
+	}
+	token := parser.Tokens[parser.Position]
+	parser.Position++
+	return token, true
+}
+
+func (parser *whereExpressionParser) matchKeyword(keyword string) bool {
+	if parser.Position >= len(parser.Tokens) {
+		return false
+	}
+	token := parser.Tokens[parser.Position]
+	if token.Quoted || !strings.EqualFold(token.Value, keyword) {
+		return false
+	}
+	parser.Position++
+	return true
+}
+
+func (parser *whereExpressionParser) matchValue(value string) bool {
+	if parser.Position >= len(parser.Tokens) {
+		return false
+	}
+	token := parser.Tokens[parser.Position]
+	if token.Quoted || token.Value != value {
+		return false
+	}
+	parser.Position++
+	return true
+}
+
+func isWhereReservedToken(value string) bool {
+	return value == "(" ||
+		value == ")" ||
+		strings.EqualFold(value, "and") ||
+		strings.EqualFold(value, "or")
 }
 
 func parseWhereComparisonOperator(input string) (WhereOperator, bool) {
@@ -698,9 +772,15 @@ func parseWhereTokens(input string) ([]insertField, bool) {
 			}
 			tokens = append(tokens, insertField{Value: value, Quoted: true})
 			i = next
-			if i < len(input) && !unicode.IsSpace(rune(input[i])) {
+			if i < len(input) && !isWhereTokenDelimiter(input[i]) {
 				return nil, false
 			}
+			continue
+		}
+
+		if input[i] == '(' || input[i] == ')' {
+			tokens = append(tokens, insertField{Value: input[i : i+1]})
+			i++
 			continue
 		}
 
@@ -715,7 +795,7 @@ func parseWhereTokens(input string) ([]insertField, bool) {
 		}
 
 		start := i
-		for i < len(input) && !unicode.IsSpace(rune(input[i])) && !isWhereOperatorByte(input[i]) {
+		for i < len(input) && !isWhereTokenDelimiter(input[i]) && !isWhereOperatorByte(input[i]) {
 			if input[i] == '\'' {
 				return nil, false
 			}
@@ -725,6 +805,10 @@ func parseWhereTokens(input string) ([]insertField, bool) {
 	}
 
 	return tokens, true
+}
+
+func isWhereTokenDelimiter(value byte) bool {
+	return unicode.IsSpace(rune(value)) || value == '(' || value == ')'
 }
 
 func isWhereOperatorByte(value byte) bool {
@@ -929,31 +1013,24 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 }
 
 func rowMatchesWhere(row Row, expression WhereExpression) bool {
-	if len(expression.Groups) == 0 {
+	switch expression.Kind {
+	case WhereExpressionNone:
 		return true
-	}
-
-	for _, group := range expression.Groups {
-		if rowMatchesConditionGroup(row, group) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func rowMatchesConditionGroup(row Row, group WhereConditionGroup) bool {
-	if len(group.Conditions) == 0 {
-		return false
-	}
-
-	for _, condition := range group.Conditions {
-		if !rowMatchesCondition(row, condition) {
+	case WhereExpressionCondition:
+		return rowMatchesCondition(row, expression.Condition)
+	case WhereExpressionAnd:
+		if expression.Left == nil || expression.Right == nil {
 			return false
 		}
+		return rowMatchesWhere(row, *expression.Left) && rowMatchesWhere(row, *expression.Right)
+	case WhereExpressionOr:
+		if expression.Left == nil || expression.Right == nil {
+			return false
+		}
+		return rowMatchesWhere(row, *expression.Left) || rowMatchesWhere(row, *expression.Right)
+	default:
+		return false
 	}
-
-	return true
 }
 
 func rowMatchesCondition(row Row, condition WhereCondition) bool {
