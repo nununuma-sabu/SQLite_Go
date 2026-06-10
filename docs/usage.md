@@ -52,8 +52,15 @@ db >
 制約:
 
 - 既にレコードがあるテーブルに対する `create table` は拒否します。
+- `create or replace table` は既存レコードを削除してスキーマを置き換えます。
 - スキーマ定義はDBファイルのメタデータページへ保存します。
 - 1行の最大サイズがleaf pageに収まらないスキーマは拒否します。
+
+```text
+db > create or replace table people (id integer primary key, name text)
+Executed.
+db >
+```
 
 ## INSERT
 

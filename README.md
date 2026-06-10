@@ -5,7 +5,7 @@ SQLiteのような小さなデータベースをGoで段階的に実装する学
 現在は、1ファイルのDBに対して以下を扱えます。
 
 - 対話形式のREPL
-- `CREATE TABLE` による単一テーブルのスキーマ定義
+- `CREATE TABLE` / `CREATE OR REPLACE TABLE` による単一テーブルのスキーマ定義
 - `insert` による1行追加
 - `select` / `select * from ...` / `select column1, column2 from ...` / `where` による取得
 - 主キーB-Treeへのキー順保存、leaf/internal nodeの分割

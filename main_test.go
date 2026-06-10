@@ -1083,6 +1083,59 @@ func TestRunRejectsCreateTableWhenTableHasRows(t *testing.T) {
 	}
 }
 
+func TestRunReplacesTableWithCreateOrReplace(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"create or replace table people (id integer primary key, name text, height real)",
+		".schema",
+		"select",
+		"insert 2 Bob 172.4",
+		"select",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > create table people (id integer primary key, name text, height real)",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (2, Bob, 172.4)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPersistsCreateOrReplaceTable(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	runScript(t, dbPath, []string{
+		"insert 1 alice alice@example.com",
+		"create or replace table people (id integer primary key, name text)",
+		"insert 2 Bob",
+		".exit",
+	})
+
+	got := runScript(t, dbPath, []string{
+		".schema",
+		"select",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > create table people (id integer primary key, name text)",
+		"db > (2, Bob)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunAllowsRowsLargerThanDefaultRowSizeWhenTheyFitLeafPage(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table huge (id integer, first_name text, last_name text)",

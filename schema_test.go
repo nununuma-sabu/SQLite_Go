@@ -78,6 +78,22 @@ func TestParseCreateTableWithColumnConstraints(t *testing.T) {
 	}
 }
 
+func TestParseCreateOrReplaceTable(t *testing.T) {
+	schema, replace, ok := parseCreateTableStatement("create or replace table people (id integer primary key, name text)")
+	if !ok {
+		t.Fatal("expected schema to parse")
+	}
+	if !replace {
+		t.Fatal("expected replace flag")
+	}
+	if schema.Name != "people" {
+		t.Fatalf("expected table name %q, got %q", "people", schema.Name)
+	}
+	if got := schema.CreateStatement(); got != "create table people (id integer primary key, name text)" {
+		t.Fatalf("expected normalized create statement, got %q", got)
+	}
+}
+
 func TestParseCreateTableWithConflictClauses(t *testing.T) {
 	schema, ok := parseCreateTable("create table people (id integer primary key asc, name text not null on conflict abort, code integer unique on conflict fail)")
 	if !ok {

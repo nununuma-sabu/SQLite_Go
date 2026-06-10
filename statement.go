@@ -9,7 +9,7 @@ import (
 )
 
 func prepareCreateTable(input string, statement *Statement) PrepareResult {
-	schema, ok := parseCreateTable(input)
+	schema, replace, ok := parseCreateTableStatement(input)
 	if !ok {
 		return PrepareSyntaxError
 	}
@@ -19,6 +19,7 @@ func prepareCreateTable(input string, statement *Statement) PrepareResult {
 
 	statement.Type = StatementCreateTable
 	statement.Schema = schema
+	statement.ReplaceTable = replace
 	return PrepareSuccess
 }
 
@@ -146,30 +147,40 @@ func mysqlEscapedByte(value byte) (byte, bool) {
 
 // create table入力からテーブル名とカラム定義を取り出す。
 func parseCreateTable(input string) (TableSchema, bool) {
+	schema, _, ok := parseCreateTableStatement(input)
+	return schema, ok
+}
+
+func parseCreateTableStatement(input string) (TableSchema, bool, bool) {
 	trimmed := strings.TrimSpace(input)
 	lower := strings.ToLower(trimmed)
-	const prefix = "create table"
+	prefix := "create table"
+	replace := false
+	if strings.HasPrefix(lower, "create or replace table") {
+		prefix = "create or replace table"
+		replace = true
+	}
 	if !strings.HasPrefix(lower, prefix) {
-		return TableSchema{}, false
+		return TableSchema{}, false, false
 	}
 
 	openParen := strings.Index(trimmed, "(")
 	closeParen := strings.LastIndex(trimmed, ")")
 	if openParen < 0 || closeParen < openParen {
-		return TableSchema{}, false
+		return TableSchema{}, false, false
 	}
 	if strings.TrimSpace(trimmed[closeParen+1:]) != "" {
-		return TableSchema{}, false
+		return TableSchema{}, false, false
 	}
 
 	tableName := strings.TrimSpace(trimmed[len(prefix):openParen])
 	if tableName == "" {
-		return TableSchema{}, false
+		return TableSchema{}, false, false
 	}
 
 	definitions, ok := splitSQLList(trimmed[openParen+1 : closeParen])
 	if !ok {
-		return TableSchema{}, false
+		return TableSchema{}, false, false
 	}
 	columns := make([]Column, 0, len(definitions))
 	tablePrimaryKey := ""
@@ -177,10 +188,10 @@ func parseCreateTable(input string) (TableSchema, bool) {
 		if isTableConstraint(definition) {
 			primaryKey, ok := parseTablePrimaryKeyConstraint(definition)
 			if !ok {
-				return TableSchema{}, false
+				return TableSchema{}, false, false
 			}
 			if tablePrimaryKey != "" {
-				return TableSchema{}, false
+				return TableSchema{}, false, false
 			}
 			tablePrimaryKey = primaryKey
 			continue
@@ -188,7 +199,7 @@ func parseCreateTable(input string) (TableSchema, bool) {
 
 		column, ok := parseColumnDefinition(definition)
 		if !ok {
-			return TableSchema{}, false
+			return TableSchema{}, false, false
 		}
 
 		columns = append(columns, column)
@@ -205,7 +216,7 @@ func parseCreateTable(input string) (TableSchema, bool) {
 			}
 		}
 		if !found {
-			return TableSchema{}, false
+			return TableSchema{}, false, false
 		}
 	}
 	applyImplicitIDPrimaryKey(columns)
@@ -215,10 +226,10 @@ func parseCreateTable(input string) (TableSchema, bool) {
 		Columns: columns,
 	}
 	if !schema.IsUsable() {
-		return TableSchema{}, false
+		return TableSchema{}, false, false
 	}
 
-	return schema, true
+	return schema, replace, true
 }
 
 func applyImplicitIDPrimaryKey(columns []Column) {
@@ -411,7 +422,8 @@ func isConflictResolution(token string) bool {
 func prepareStatement(input string, statement *Statement, schema TableSchema) PrepareResult {
 	input = strings.TrimSpace(input)
 
-	if strings.HasPrefix(strings.ToLower(input), "create table") {
+	lowerInput := strings.ToLower(input)
+	if strings.HasPrefix(lowerInput, "create table") || strings.HasPrefix(lowerInput, "create or replace table") {
 		return prepareCreateTable(input, statement)
 	}
 
@@ -1078,12 +1090,43 @@ func compareValues(left Value, right Value) (int, bool) {
 }
 
 func executeCreateTable(statement *Statement, table *Table) ExecuteResult {
+	if statement.ReplaceTable {
+		replaceTable(statement, table)
+		return ExecuteSuccess
+	}
+
 	if !tableIsEmpty(table) {
 		return ExecuteTableNotEmpty
 	}
 
 	table.Schema = statement.Schema
 	return ExecuteSuccess
+}
+
+func replaceTable(statement *Statement, table *Table) {
+	table.Schema = statement.Schema
+	table.RootPageNum = defaultRootPageNum
+	table.HasMetadata = true
+
+	pager := table.Pager
+	for i := uint32(defaultRootPageNum + 1); i < pager.NumPages; i++ {
+		pager.Pages[i] = nil
+	}
+	pager.NumPages = defaultRootPageNum + 1
+	pager.FileLength = int64(pager.NumPages) * pageSize
+	if err := pager.File.Truncate(pager.FileLength); err != nil {
+		panic(err)
+	}
+
+	metadataPage := getPage(pager, metadataPageNum)
+	if err := writeDatabaseMetadata(metadataPage, databaseMetadata{Schema: table.Schema}); err != nil {
+		panic(err)
+	}
+
+	rootNode := getPage(pager, table.RootPageNum)
+	clear(rootNode)
+	initializeLeafNode(rootNode)
+	setNodeRoot(rootNode, true)
 }
 
 // 現在の実装では、既存データのあるテーブルのスキーマ変更は許可しない。

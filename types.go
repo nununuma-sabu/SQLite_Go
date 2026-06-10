@@ -6,6 +6,7 @@ import "os"
 type Statement struct {
 	Type          StatementType
 	RowToInsert   Row
+	ReplaceTable  bool
 	SelectByKey   *uint32
 	SelectColumns []Column
 	SelectWhere   WhereExpression
