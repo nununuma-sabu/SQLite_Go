@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -883,10 +884,10 @@ func TestRunPrintsConstants(t *testing.T) {
 
 	want := strings.Join([]string{
 		"db > Constants:",
-		"ROW_SIZE: 293",
+		"ROW_SIZE: 297",
 		"COMMON_NODE_HEADER_SIZE: 6",
 		"LEAF_NODE_HEADER_SIZE: 14",
-		"LEAF_NODE_CELL_SIZE: 297",
+		"LEAF_NODE_CELL_SIZE: 301",
 		"LEAF_NODE_SPACE_FOR_CELLS: 4082",
 		"LEAF_NODE_MAX_CELLS: 13",
 		"db > ",
@@ -1022,8 +1023,31 @@ func TestSerializeAndDeserializeRow(t *testing.T) {
 	storage := make([]byte, rowSize)
 
 	serializeRow(row, DefaultTableSchema(), storage)
+	if string(storage[:len(rowRecordFormatMagic)]) != rowRecordFormatMagic {
+		t.Fatalf("expected row format magic %q, got %q", rowRecordFormatMagic, string(storage[:len(rowRecordFormatMagic)]))
+	}
 	got := deserializeRow(storage, DefaultTableSchema())
 
+	for _, column := range DefaultTableSchema().Columns {
+		if !valuesEqual(rowValue(got, column), rowValue(row, column)) {
+			t.Fatalf("expected row %#v, got %#v", row, got)
+		}
+	}
+}
+
+func TestDeserializeFixedRowFormat(t *testing.T) {
+	row := defaultRow(1, "alice", "alice@example.com")
+	storage := make([]byte, DefaultTableSchema().RowLayout().Size)
+	layout := DefaultTableSchema().RowLayout()
+
+	start, end, _ := layout.ColumnRange(idColumnName)
+	binary.LittleEndian.PutUint32(storage[start:end], 1)
+	start, end, _ = layout.ColumnRange(usernameColumnName)
+	writeFixedString(storage[start:end], "alice")
+	start, end, _ = layout.ColumnRange(emailColumnName)
+	writeFixedString(storage[start:end], "alice@example.com")
+
+	got := deserializeRow(storage, DefaultTableSchema())
 	for _, column := range DefaultTableSchema().Columns {
 		if !valuesEqual(rowValue(got, column), rowValue(row, column)) {
 			t.Fatalf("expected row %#v, got %#v", row, got)

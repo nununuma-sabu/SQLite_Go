@@ -12,7 +12,7 @@ func prepareCreateTable(input string, statement *Statement) PrepareResult {
 	if !ok {
 		return PrepareSyntaxError
 	}
-	if schema.RowLayout().Size > rowSize {
+	if schema.SerializedRowSize() > rowSize {
 		return PrepareRowTooLarge
 	}
 

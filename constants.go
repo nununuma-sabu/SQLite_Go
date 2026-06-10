@@ -13,7 +13,7 @@ const (
 )
 
 var (
-	rowSize                 uint32 = DefaultTableSchema().RowLayout().Size
+	rowSize                 uint32 = DefaultTableSchema().SerializedRowSize()
 	leafNodeValueSize       uint32 = rowSize
 	leafNodeCellSize        uint32 = leafNodeKeySize + leafNodeValueSize
 	leafNodeSpaceForCells   uint32 = pageSize - leafNodeHeaderSize

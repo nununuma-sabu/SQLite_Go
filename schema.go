@@ -205,6 +205,15 @@ func (schema TableSchema) CreateStatement() string {
 	return "create table " + schema.Name + " (" + strings.Join(columnDefinitions, ", ") + ")"
 }
 
+func (schema TableSchema) SerializedRowSize() uint32 {
+	size := uint32(len(rowRecordFormatMagic))
+	for _, column := range schema.Columns {
+		size += column.SerializedSize()
+	}
+
+	return size
+}
+
 func (schema TableSchema) RowLayout() RowLayout {
 	layout := RowLayout{
 		ColumnOffsets: make(map[string]uint32, len(schema.Columns)),
@@ -232,6 +241,10 @@ func (layout RowLayout) ColumnRange(columnName string) (uint32, uint32, bool) {
 }
 
 func (column Column) StorageSize() uint32 {
+	return column.SerializedSize()
+}
+
+func (column Column) SerializedSize() uint32 {
 	switch column.Affinity {
 	case AffinityInteger:
 		return idSize

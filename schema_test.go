@@ -204,6 +204,12 @@ func TestDefaultTableSchemaRowLayout(t *testing.T) {
 	}
 }
 
+func TestDefaultTableSchemaSerializedRowSize(t *testing.T) {
+	if got := DefaultTableSchema().SerializedRowSize(); got != 297 {
+		t.Fatalf("expected serialized row size %d, got %d", 297, got)
+	}
+}
+
 func TestTableSchemaIsUsable(t *testing.T) {
 	tests := []struct {
 		name   string

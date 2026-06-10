@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+const rowRecordFormatMagic = "SGR1"
+
 var defaultRowLayout = DefaultTableSchema().RowLayout()
 
 // Rowを画面表示用の形式で出力する。
@@ -37,26 +39,76 @@ func readFixedString(source []byte) string {
 
 // Rowをページ内に保存できる固定長のバイト列へ変換する。
 func serializeRow(source Row, schema TableSchema, destination []byte) {
-	layout := schema.RowLayout()
 	clear(destination)
+	if len(destination) == 0 {
+		return
+	}
 
+	copy(destination, rowRecordFormatMagic)
+	offset := len(rowRecordFormatMagic)
 	for _, column := range schema.Columns {
-		start, end := mustColumnRange(layout, column.Name)
 		value := rowValue(source, column)
 
 		switch column.Affinity {
 		case AffinityInteger:
-			binary.LittleEndian.PutUint32(destination[start:end], uint32(value.Integer))
+			binary.LittleEndian.PutUint32(destination[offset:offset+idSize], uint32(value.Integer))
+			offset += idSize
 		case AffinityReal:
-			binary.LittleEndian.PutUint64(destination[start:end], math.Float64bits(value.Real))
+			binary.LittleEndian.PutUint64(destination[offset:offset+8], math.Float64bits(value.Real))
+			offset += 8
 		case AffinityText:
-			writeFixedString(destination[start:end], value.Text)
+			destination[offset] = byte(len(value.Text))
+			offset++
+			copy(destination[offset:offset+len(value.Text)], value.Text)
+			offset += len(value.Text)
 		}
 	}
 }
 
 // 固定長のバイト列からRowを復元する。
 func deserializeRow(source []byte, schema TableSchema) Row {
+	if len(source) >= len(rowRecordFormatMagic) && string(source[:len(rowRecordFormatMagic)]) == rowRecordFormatMagic {
+		return deserializeRecordRow(source, schema)
+	}
+
+	return deserializeFixedRow(source, schema)
+}
+
+func deserializeRecordRow(source []byte, schema TableSchema) Row {
+	row := Row{
+		Values: make(map[string]Value, len(schema.Columns)),
+	}
+
+	offset := len(rowRecordFormatMagic)
+	for _, column := range schema.Columns {
+		value := Value{}
+
+		switch column.Affinity {
+		case AffinityInteger:
+			value.StorageClass = StorageInteger
+			value.Integer = int64(binary.LittleEndian.Uint32(source[offset : offset+idSize]))
+			offset += idSize
+		case AffinityReal:
+			value.StorageClass = StorageReal
+			value.Real = math.Float64frombits(binary.LittleEndian.Uint64(source[offset : offset+8]))
+			offset += 8
+		case AffinityText:
+			value.StorageClass = StorageText
+			length := int(source[offset])
+			offset++
+			value.Text = string(source[offset : offset+length])
+			offset += length
+		default:
+			value.StorageClass = StorageNull
+		}
+
+		row.Values[column.Name] = value
+	}
+
+	return row
+}
+
+func deserializeFixedRow(source []byte, schema TableSchema) Row {
 	layout := schema.RowLayout()
 	row := Row{
 		Values: make(map[string]Value, len(schema.Columns)),
