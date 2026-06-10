@@ -267,6 +267,73 @@ func TestRunExecutesSelectColumnsFromTable(t *testing.T) {
 	}
 }
 
+func TestRunExecutesSelectWhereByPrimaryKey(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"insert 2 bob bob@example.com",
+		"insert 3 carol carol@example.com",
+		"SELECT * FROM users WHERE id = 2;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (2, bob, bob@example.com)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesSelectWhereByTextColumn(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"insert 2 'Alice Smith' alice.smith@example.com",
+		"SELECT id, email FROM users WHERE username = 'Alice Smith';",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > (2, alice.smith@example.com)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesSelectWhereIsNull(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, nickname text, code integer unique)",
+		"insert 1 null null",
+		"insert 2 bob 20",
+		"SELECT id FROM people WHERE nickname IS NULL;",
+		"SELECT id FROM people WHERE code IS NOT NULL;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (1)",
+		"Executed.",
+		"db > (2)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesSelectColumnsFromCustomTable(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table tbl1 (id integer primary key, column1 text, column2 real)",
@@ -291,10 +358,14 @@ func TestRunPrintsSyntaxErrorForInvalidSelectFrom(t *testing.T) {
 	got := runTempScript(t, []string{
 		"SELECT missing FROM users;",
 		"SELECT * FROM missing;",
+		"SELECT * FROM users WHERE missing = 1;",
+		"SELECT * FROM users WHERE id = null;",
 		".exit",
 	})
 
 	want := strings.Join([]string{
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > ",

@@ -8,8 +8,25 @@ type Statement struct {
 	RowToInsert   Row
 	SelectByKey   *uint32
 	SelectColumns []Column
+	SelectWhere   *WhereCondition
 	Schema        TableSchema
 }
+
+// WhereCondition はSELECTの単一WHERE条件を表す。
+type WhereCondition struct {
+	Column   Column
+	Operator WhereOperator
+	Value    Value
+}
+
+// WhereOperator はWHERE条件で使える比較演算子を表す。
+type WhereOperator int
+
+const (
+	WhereEqual WhereOperator = iota
+	WhereIsNull
+	WhereIsNotNull
+)
 
 // Row は1レコードを表す。
 type Row struct {

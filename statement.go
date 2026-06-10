@@ -421,11 +421,12 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 	if strings.HasPrefix(strings.ToLower(input), "select") {
 		statement.Type = StatementSelect
 		if strings.Contains(strings.ToLower(input), " from ") {
-			columns, result := parseSelectStatement(input, schema)
+			selectClause, result := parseSelectStatement(input, schema)
 			if result != PrepareSuccess {
 				return result
 			}
-			statement.SelectColumns = columns
+			statement.SelectColumns = selectClause.Columns
+			statement.SelectWhere = selectClause.Where
 			return PrepareSuccess
 		}
 
@@ -456,50 +457,70 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 	return PrepareUnrecognizedStatement
 }
 
-func parseSelectStatement(input string, schema TableSchema) ([]Column, PrepareResult) {
+type selectClause struct {
+	Columns []Column
+	Where   *WhereCondition
+}
+
+func parseSelectStatement(input string, schema TableSchema) (selectClause, PrepareResult) {
 	trimmed := strings.TrimSpace(input)
 	trimmed = strings.TrimSuffix(trimmed, ";")
 	trimmed = strings.TrimSpace(trimmed)
 
 	const selectPrefix = "select "
 	if !strings.HasPrefix(strings.ToLower(trimmed), selectPrefix) {
-		return nil, PrepareSyntaxError
+		return selectClause{}, PrepareSyntaxError
 	}
 
 	body := strings.TrimSpace(trimmed[len(selectPrefix):])
 	fromIndex := findSelectFromIndex(body)
 	if fromIndex < 0 {
-		return nil, PrepareSyntaxError
+		return selectClause{}, PrepareSyntaxError
 	}
 
 	columnList := strings.TrimSpace(body[:fromIndex])
-	tableName := strings.TrimSpace(body[fromIndex+len(" from "):])
+	tableAndWhere := strings.TrimSpace(body[fromIndex+len(" from "):])
+	whereIndex := findSelectWhereIndex(tableAndWhere)
+	tableName := tableAndWhere
+	var where *WhereCondition
+	if whereIndex >= 0 {
+		tableName = strings.TrimSpace(tableAndWhere[:whereIndex])
+		whereInput := strings.TrimSpace(tableAndWhere[whereIndex+len(" where "):])
+		if whereInput == "" {
+			return selectClause{}, PrepareSyntaxError
+		}
+		condition, result := parseWhereCondition(whereInput, schema)
+		if result != PrepareSuccess {
+			return selectClause{}, result
+		}
+		where = &condition
+	}
 	if columnList == "" || tableName == "" || !strings.EqualFold(tableName, schema.Name) {
-		return nil, PrepareSyntaxError
+		return selectClause{}, PrepareSyntaxError
 	}
 
 	if columnList == "*" {
-		return schema.Columns, PrepareSuccess
+		return selectClause{Columns: schema.Columns, Where: where}, PrepareSuccess
 	}
 
 	columnNames, ok := splitSQLList(columnList)
 	if !ok {
-		return nil, PrepareSyntaxError
+		return selectClause{}, PrepareSyntaxError
 	}
 	columns := make([]Column, 0, len(columnNames))
 	for _, columnName := range columnNames {
 		columnName = strings.TrimSpace(columnName)
 		if columnName == "" || columnName == "*" {
-			return nil, PrepareSyntaxError
+			return selectClause{}, PrepareSyntaxError
 		}
 		column, ok := schema.Column(columnName)
 		if !ok {
-			return nil, PrepareSyntaxError
+			return selectClause{}, PrepareSyntaxError
 		}
 		columns = append(columns, column)
 	}
 
-	return columns, PrepareSuccess
+	return selectClause{Columns: columns, Where: where}, PrepareSuccess
 }
 
 func findSelectFromIndex(body string) int {
@@ -520,6 +541,103 @@ func findSelectFromIndex(body string) int {
 	}
 
 	return -1
+}
+
+func findSelectWhereIndex(body string) int {
+	lower := strings.ToLower(body)
+	inString := false
+	for i := 0; i <= len(lower)-len(" where "); i++ {
+		if body[i] == '\'' {
+			if inString && i+1 < len(body) && body[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if !inString && strings.HasPrefix(lower[i:], " where ") {
+			return i
+		}
+	}
+
+	return -1
+}
+
+func parseWhereCondition(input string, schema TableSchema) (WhereCondition, PrepareResult) {
+	tokens, ok := parseWhereTokens(input)
+	if !ok || len(tokens) < 3 {
+		return WhereCondition{}, PrepareSyntaxError
+	}
+
+	column, ok := schema.Column(tokens[0].Value)
+	if !ok {
+		return WhereCondition{}, PrepareSyntaxError
+	}
+
+	if strings.EqualFold(tokens[1].Value, "is") {
+		if len(tokens) == 3 && strings.EqualFold(tokens[2].Value, "null") {
+			return WhereCondition{Column: column, Operator: WhereIsNull}, PrepareSuccess
+		}
+		if len(tokens) == 4 && strings.EqualFold(tokens[2].Value, "not") && strings.EqualFold(tokens[3].Value, "null") {
+			return WhereCondition{Column: column, Operator: WhereIsNotNull}, PrepareSuccess
+		}
+		return WhereCondition{}, PrepareSyntaxError
+	}
+
+	if tokens[1].Value != "=" || len(tokens) != 3 {
+		return WhereCondition{}, PrepareSyntaxError
+	}
+	if !tokens[2].Quoted && strings.EqualFold(tokens[2].Value, "null") {
+		return WhereCondition{}, PrepareSyntaxError
+	}
+	value, result := parseColumnValue(tokens[2], column)
+	if result != PrepareSuccess {
+		return WhereCondition{}, result
+	}
+
+	return WhereCondition{Column: column, Operator: WhereEqual, Value: value}, PrepareSuccess
+}
+
+func parseWhereTokens(input string) ([]insertField, bool) {
+	tokens := []insertField{}
+	for i := 0; i < len(input); {
+		for i < len(input) && unicode.IsSpace(rune(input[i])) {
+			i++
+		}
+		if i >= len(input) {
+			break
+		}
+
+		if input[i] == '\'' {
+			value, next, ok := parseSQLStringLiteral(input, i)
+			if !ok {
+				return nil, false
+			}
+			tokens = append(tokens, insertField{Value: value, Quoted: true})
+			i = next
+			if i < len(input) && !unicode.IsSpace(rune(input[i])) {
+				return nil, false
+			}
+			continue
+		}
+
+		if input[i] == '=' {
+			tokens = append(tokens, insertField{Value: "="})
+			i++
+			continue
+		}
+
+		start := i
+		for i < len(input) && !unicode.IsSpace(rune(input[i])) && input[i] != '=' {
+			if input[i] == '\'' {
+				return nil, false
+			}
+			i++
+		}
+		tokens = append(tokens, insertField{Value: input[start:i]})
+	}
+
+	return tokens, true
 }
 
 func parseColumnValue(field insertField, column Column) (Value, PrepareResult) {
@@ -651,18 +769,42 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 		cursor := tableFind(table, *statement.SelectByKey)
 		node := getPage(table.Pager, cursor.PageNum)
 		if cursor.CellNum < leafNodeNumCells(node) && leafNodeKey(node, cursor.CellNum) == *statement.SelectByKey {
-			printColumns(deserializeRow(cursorValue(cursor), table.Schema), columns, out)
+			row := deserializeRow(cursorValue(cursor), table.Schema)
+			if rowMatchesWhere(row, statement.SelectWhere) {
+				printColumns(row, columns, out)
+			}
 		}
 		return ExecuteSuccess
 	}
 
 	cursor := tableStart(table)
 	for !cursor.EndOfTable {
-		printColumns(deserializeRow(cursorValue(cursor), table.Schema), columns, out)
+		row := deserializeRow(cursorValue(cursor), table.Schema)
+		if rowMatchesWhere(row, statement.SelectWhere) {
+			printColumns(row, columns, out)
+		}
 		cursorAdvance(cursor)
 	}
 
 	return ExecuteSuccess
+}
+
+func rowMatchesWhere(row Row, condition *WhereCondition) bool {
+	if condition == nil {
+		return true
+	}
+
+	value := rowValue(row, condition.Column)
+	switch condition.Operator {
+	case WhereEqual:
+		return valuesEqual(value, condition.Value)
+	case WhereIsNull:
+		return value.StorageClass == StorageNull
+	case WhereIsNotNull:
+		return value.StorageClass != StorageNull
+	default:
+		return false
+	}
 }
 
 // パース済みステートメントを実行する。

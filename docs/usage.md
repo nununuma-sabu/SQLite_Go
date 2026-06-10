@@ -114,6 +114,20 @@ Executed.
 db >
 ```
 
+`where` で単一条件を指定できます。
+対応している条件は `=`、`is null`、`is not null` です。
+
+```text
+db > select username, email from users where id = 2;
+(bob, bob@example.com)
+Executed.
+db > select id from users where email is not null;
+(1)
+(2)
+Executed.
+db >
+```
+
 `select <id>` は指定したIDのレコードだけを表示します。
 
 ```text
