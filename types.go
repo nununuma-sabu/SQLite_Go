@@ -8,8 +8,18 @@ type Statement struct {
 	RowToInsert   Row
 	SelectByKey   *uint32
 	SelectColumns []Column
-	SelectWhere   []WhereCondition
+	SelectWhere   WhereExpression
 	Schema        TableSchema
+}
+
+// WhereExpression はORで区切られたWHERE条件グループを表す。
+type WhereExpression struct {
+	Groups []WhereConditionGroup
+}
+
+// WhereConditionGroup はANDでつながるWHERE条件を表す。
+type WhereConditionGroup struct {
+	Conditions []WhereCondition
 }
 
 // WhereCondition はSELECTの単一WHERE条件を表す。

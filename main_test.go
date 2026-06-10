@@ -399,6 +399,38 @@ func TestRunExecutesSelectWhereAndConditions(t *testing.T) {
 	}
 }
 
+func TestRunExecutesSelectWhereOrConditions(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real, note text)",
+		"insert 1 Alice 165.2 design",
+		"insert 2 Bob 172.4 ops",
+		"insert 3 Carol 158.9 'research or docs'",
+		"SELECT name FROM people WHERE id = 1 OR height < 160;",
+		"SELECT name FROM people WHERE id = 1 OR id = 2 AND height < 170;",
+		"SELECT id FROM people WHERE note = 'research or docs' OR name = Bob;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (Alice)",
+		"(Carol)",
+		"Executed.",
+		"db > (Alice)",
+		"Executed.",
+		"db > (2)",
+		"(3)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesSelectColumnsFromCustomTable(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table tbl1 (id integer primary key, column1 text, column2 real)",
@@ -426,10 +458,12 @@ func TestRunPrintsSyntaxErrorForInvalidSelectFrom(t *testing.T) {
 		"SELECT * FROM users WHERE missing = 1;",
 		"SELECT * FROM users WHERE id = null;",
 		"SELECT * FROM users WHERE id = 1 AND;",
+		"SELECT * FROM users WHERE id = 1 OR;",
 		".exit",
 	})
 
 	want := strings.Join([]string{
+		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",

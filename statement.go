@@ -459,7 +459,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 
 type selectClause struct {
 	Columns []Column
-	Where   []WhereCondition
+	Where   WhereExpression
 }
 
 func parseSelectStatement(input string, schema TableSchema) (selectClause, PrepareResult) {
@@ -482,18 +482,18 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	tableAndWhere := strings.TrimSpace(body[fromIndex+len(" from "):])
 	whereIndex := findSelectWhereIndex(tableAndWhere)
 	tableName := tableAndWhere
-	var where []WhereCondition
+	var where WhereExpression
 	if whereIndex >= 0 {
 		tableName = strings.TrimSpace(tableAndWhere[:whereIndex])
 		whereInput := strings.TrimSpace(tableAndWhere[whereIndex+len(" where "):])
 		if whereInput == "" {
 			return selectClause{}, PrepareSyntaxError
 		}
-		conditions, result := parseWhereConditions(whereInput, schema)
+		expression, result := parseWhereExpression(whereInput, schema)
 		if result != PrepareSuccess {
 			return selectClause{}, result
 		}
-		where = conditions
+		where = expression
 	}
 	if columnList == "" || tableName == "" || !strings.EqualFold(tableName, schema.Name) {
 		return selectClause{}, PrepareSyntaxError
@@ -563,25 +563,35 @@ func findSelectWhereIndex(body string) int {
 	return -1
 }
 
-func parseWhereConditions(input string, schema TableSchema) ([]WhereCondition, PrepareResult) {
-	parts, ok := splitWhereAndConditions(input)
+func parseWhereExpression(input string, schema TableSchema) (WhereExpression, PrepareResult) {
+	orParts, ok := splitWhereConditions(input, "or")
 	if !ok {
-		return nil, PrepareSyntaxError
+		return WhereExpression{}, PrepareSyntaxError
 	}
 
-	conditions := make([]WhereCondition, 0, len(parts))
-	for _, part := range parts {
-		condition, result := parseWhereCondition(part, schema)
-		if result != PrepareSuccess {
-			return nil, result
+	groups := make([]WhereConditionGroup, 0, len(orParts))
+	for _, orPart := range orParts {
+		andParts, ok := splitWhereConditions(orPart, "and")
+		if !ok {
+			return WhereExpression{}, PrepareSyntaxError
 		}
-		conditions = append(conditions, condition)
+
+		conditions := make([]WhereCondition, 0, len(andParts))
+		for _, andPart := range andParts {
+			condition, result := parseWhereCondition(andPart, schema)
+			if result != PrepareSuccess {
+				return WhereExpression{}, result
+			}
+			conditions = append(conditions, condition)
+		}
+		groups = append(groups, WhereConditionGroup{Conditions: conditions})
 	}
 
-	return conditions, PrepareSuccess
+	return WhereExpression{Groups: groups}, PrepareSuccess
 }
 
-func splitWhereAndConditions(input string) ([]string, bool) {
+func splitWhereConditions(input string, operator string) ([]string, bool) {
+	separator := " " + operator + " "
 	conditions := []string{}
 	start := 0
 	inString := false
@@ -594,13 +604,13 @@ func splitWhereAndConditions(input string) ([]string, bool) {
 			inString = !inString
 			continue
 		}
-		if !inString && i+len(" and ") <= len(input) && strings.EqualFold(input[i:i+len(" and ")], " and ") {
+		if !inString && i+len(separator) <= len(input) && strings.EqualFold(input[i:i+len(separator)], separator) {
 			condition := strings.TrimSpace(input[start:i])
 			if condition == "" {
 				return nil, false
 			}
 			conditions = append(conditions, condition)
-			start = i + len(" and ")
+			start = i + len(separator)
 			i = start - 1
 		}
 	}
@@ -918,12 +928,26 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	return ExecuteSuccess
 }
 
-func rowMatchesWhere(row Row, conditions []WhereCondition) bool {
-	if len(conditions) == 0 {
+func rowMatchesWhere(row Row, expression WhereExpression) bool {
+	if len(expression.Groups) == 0 {
 		return true
 	}
 
-	for _, condition := range conditions {
+	for _, group := range expression.Groups {
+		if rowMatchesConditionGroup(row, group) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func rowMatchesConditionGroup(row Row, group WhereConditionGroup) bool {
+	if len(group.Conditions) == 0 {
+		return false
+	}
+
+	for _, condition := range group.Conditions {
 		if !rowMatchesCondition(row, condition) {
 			return false
 		}
