@@ -98,6 +98,7 @@ const (
 	PrepareNegativeID
 	PrepareStringTooLong
 	PrepareRowTooLarge
+	PrepareConstraintViolation
 	PrepareSyntaxError
 	PrepareUnrecognizedStatement
 )

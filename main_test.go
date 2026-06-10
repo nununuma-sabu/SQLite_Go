@@ -466,6 +466,66 @@ func TestRunRejectsDuplicateUniqueColumnValue(t *testing.T) {
 	}
 }
 
+func TestRunStoresNullValues(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, nickname text, code integer unique)",
+		"insert 1 null null",
+		"insert 2 null null",
+		"select",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (1, NULL, NULL)",
+		"(2, NULL, NULL)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunRejectsNullForNotNullColumn(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text not null)",
+		"insert 1 null",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Error: Constraint violation.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunTreatsQuotedNullAsText(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text)",
+		"insert 1 'null'",
+		"select",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > (1, null)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunSelectsByIDWithCustomSchema(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table people (id integer, name text, height real, weight real)",
@@ -912,10 +972,10 @@ func TestRunPrintsConstants(t *testing.T) {
 
 	want := strings.Join([]string{
 		"db > Constants:",
-		"ROW_SIZE: 297",
+		"ROW_SIZE: 300",
 		"COMMON_NODE_HEADER_SIZE: 6",
 		"LEAF_NODE_HEADER_SIZE: 16",
-		"LEAF_NODE_CELL_SIZE: 305",
+		"LEAF_NODE_CELL_SIZE: 308",
 		"LEAF_NODE_SPACE_FOR_CELLS: 4080",
 		"LEAF_NODE_MAX_CELLS: 13",
 		"db > ",

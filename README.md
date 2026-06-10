@@ -254,7 +254,8 @@ GOCACHE=/tmp/go-build go test ./...
 2. 完了: Rowの値取得・キー取得をスキーマベースに整理する。
 3. 完了: Rowシリアライズを可変長化する。
 4. 完了: leaf nodeセルを可変長化する。
-5. その後に複合主キー、NULL、DEFAULT、CHECK、インデックスへ進む。
+5. 着手: NULL、NOT NULL、複合主キー、DEFAULT、CHECK、インデックスへ進む。
+   - 完了: NULL値の保存とNOT NULL制約の検査。
 
 ## 今後の拡張案
 

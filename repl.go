@@ -67,6 +67,9 @@ func run(in io.Reader, out io.Writer, table *Table) (code ExitCode) {
 		case PrepareRowTooLarge:
 			fmt.Fprintln(out, "Row is too large.")
 			continue
+		case PrepareConstraintViolation:
+			fmt.Fprintln(out, "Error: Constraint violation.")
+			continue
 		case PrepareSyntaxError:
 			fmt.Fprintln(out, "Syntax error. Could not parse statement.")
 			continue

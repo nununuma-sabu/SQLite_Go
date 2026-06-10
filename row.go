@@ -9,7 +9,10 @@ import (
 	"strings"
 )
 
-const rowRecordFormatMagic = "SGR1"
+const (
+	rowRecordFormatMagic       = "SGR2"
+	legacyRowRecordFormatMagic = "SGR1"
+)
 
 var defaultRowLayout = DefaultTableSchema().RowLayout()
 
@@ -41,12 +44,14 @@ func serializedRowSize(row Row, schema TableSchema) uint32 {
 	size := uint32(len(rowRecordFormatMagic))
 	for _, column := range schema.Columns {
 		value := rowValue(row, column)
-		switch column.Affinity {
-		case AffinityInteger:
+		size++
+		switch value.StorageClass {
+		case StorageNull:
+		case StorageInteger:
 			size += idSize
-		case AffinityReal:
+		case StorageReal:
 			size += 8
-		case AffinityText:
+		case StorageText:
 			size += 1 + uint32(len(value.Text))
 		}
 	}
@@ -65,15 +70,18 @@ func serializeRow(source Row, schema TableSchema, destination []byte) {
 	offset := len(rowRecordFormatMagic)
 	for _, column := range schema.Columns {
 		value := rowValue(source, column)
+		destination[offset] = byte(value.StorageClass)
+		offset++
 
-		switch column.Affinity {
-		case AffinityInteger:
+		switch value.StorageClass {
+		case StorageNull:
+		case StorageInteger:
 			binary.LittleEndian.PutUint32(destination[offset:offset+idSize], uint32(value.Integer))
 			offset += idSize
-		case AffinityReal:
+		case StorageReal:
 			binary.LittleEndian.PutUint64(destination[offset:offset+8], math.Float64bits(value.Real))
 			offset += 8
-		case AffinityText:
+		case StorageText:
 			destination[offset] = byte(len(value.Text))
 			offset++
 			copy(destination[offset:offset+len(value.Text)], value.Text)
@@ -87,6 +95,9 @@ func deserializeRow(source []byte, schema TableSchema) Row {
 	if len(source) >= len(rowRecordFormatMagic) && string(source[:len(rowRecordFormatMagic)]) == rowRecordFormatMagic {
 		return deserializeRecordRow(source, schema)
 	}
+	if len(source) >= len(legacyRowRecordFormatMagic) && string(source[:len(legacyRowRecordFormatMagic)]) == legacyRowRecordFormatMagic {
+		return deserializeLegacyRecordRow(source, schema)
+	}
 
 	return deserializeFixedRow(source, schema)
 }
@@ -97,6 +108,38 @@ func deserializeRecordRow(source []byte, schema TableSchema) Row {
 	}
 
 	offset := len(rowRecordFormatMagic)
+	for _, column := range schema.Columns {
+		value := Value{}
+		value.StorageClass = StorageClass(source[offset])
+		offset++
+
+		switch value.StorageClass {
+		case StorageNull:
+		case StorageInteger:
+			value.Integer = int64(binary.LittleEndian.Uint32(source[offset : offset+idSize]))
+			offset += idSize
+		case StorageReal:
+			value.Real = math.Float64frombits(binary.LittleEndian.Uint64(source[offset : offset+8]))
+			offset += 8
+		case StorageText:
+			length := int(source[offset])
+			offset++
+			value.Text = string(source[offset : offset+length])
+			offset += length
+		}
+
+		row.Values[column.Name] = value
+	}
+
+	return row
+}
+
+func deserializeLegacyRecordRow(source []byte, schema TableSchema) Row {
+	row := Row{
+		Values: make(map[string]Value, len(schema.Columns)),
+	}
+
+	offset := len(legacyRowRecordFormatMagic)
 	for _, column := range schema.Columns {
 		value := Value{}
 
@@ -188,6 +231,9 @@ func rowKey(row Row, schema TableSchema) (uint32, bool) {
 
 func formatRowValue(row Row, column Column) string {
 	value := rowValue(row, column)
+	if value.StorageClass == StorageNull {
+		return "NULL"
+	}
 
 	switch column.Affinity {
 	case AffinityInteger:

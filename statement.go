@@ -38,8 +38,7 @@ func prepareInsert(input string, statement *Statement, schema TableSchema) Prepa
 	}
 
 	for i, column := range schema.Columns {
-		rawValue := fields[i+1]
-		value, result := parseColumnValue(rawValue, column)
+		value, result := parseColumnValue(fields[i+1], column)
 		if result != PrepareSuccess {
 			return result
 		}
@@ -50,8 +49,13 @@ func prepareInsert(input string, statement *Statement, schema TableSchema) Prepa
 	return PrepareSuccess
 }
 
-func parseInsertFields(input string) ([]string, bool) {
-	fields := []string{}
+type insertField struct {
+	Value  string
+	Quoted bool
+}
+
+func parseInsertFields(input string) ([]insertField, bool) {
+	fields := []insertField{}
 	for i := 0; i < len(input); {
 		for i < len(input) && unicode.IsSpace(rune(input[i])) {
 			i++
@@ -65,7 +69,7 @@ func parseInsertFields(input string) ([]string, bool) {
 			if !ok {
 				return nil, false
 			}
-			fields = append(fields, value)
+			fields = append(fields, insertField{Value: value, Quoted: true})
 			i = next
 			if i < len(input) && !unicode.IsSpace(rune(input[i])) {
 				return nil, false
@@ -80,7 +84,7 @@ func parseInsertFields(input string) ([]string, bool) {
 			}
 			i++
 		}
-		fields = append(fields, input[start:i])
+		fields = append(fields, insertField{Value: input[start:i]})
 	}
 
 	return fields, true
@@ -441,10 +445,17 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 	return PrepareUnrecognizedStatement
 }
 
-func parseColumnValue(rawValue string, column Column) (Value, PrepareResult) {
+func parseColumnValue(field insertField, column Column) (Value, PrepareResult) {
+	if !field.Quoted && strings.EqualFold(field.Value, "null") {
+		if column.NotNull || column.PrimaryKey {
+			return Value{}, PrepareConstraintViolation
+		}
+		return Value{StorageClass: StorageNull}, PrepareSuccess
+	}
+
 	switch column.Affinity {
 	case AffinityInteger:
-		integer, err := strconv.ParseInt(rawValue, 10, 32)
+		integer, err := strconv.ParseInt(field.Value, 10, 32)
 		if err != nil {
 			return Value{}, PrepareSyntaxError
 		}
@@ -453,16 +464,16 @@ func parseColumnValue(rawValue string, column Column) (Value, PrepareResult) {
 		}
 		return Value{StorageClass: StorageInteger, Integer: integer}, PrepareSuccess
 	case AffinityReal:
-		real, err := strconv.ParseFloat(rawValue, 64)
+		real, err := strconv.ParseFloat(field.Value, 64)
 		if err != nil {
 			return Value{}, PrepareSyntaxError
 		}
 		return Value{StorageClass: StorageReal, Real: real}, PrepareSuccess
 	case AffinityText:
-		if !column.ValidateTextValue(rawValue) {
+		if !column.ValidateTextValue(field.Value) {
 			return Value{}, PrepareStringTooLong
 		}
-		return Value{StorageClass: StorageText, Text: rawValue}, PrepareSuccess
+		return Value{StorageClass: StorageText, Text: field.Value}, PrepareSuccess
 	default:
 		return Value{}, PrepareSyntaxError
 	}
@@ -499,6 +510,9 @@ func violatesUniqueConstraint(row Row, table *Table) bool {
 		}
 
 		value := rowValue(row, column)
+		if value.StorageClass == StorageNull {
+			continue
+		}
 		cursor := tableStart(table)
 		for !cursor.EndOfTable {
 			existingRow := deserializeRow(cursorValue(cursor), table.Schema)

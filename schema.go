@@ -241,10 +241,6 @@ func (layout RowLayout) ColumnRange(columnName string) (uint32, uint32, bool) {
 }
 
 func (column Column) StorageSize() uint32 {
-	return column.SerializedSize()
-}
-
-func (column Column) SerializedSize() uint32 {
 	switch column.Affinity {
 	case AffinityInteger:
 		return idSize
@@ -259,6 +255,10 @@ func (column Column) SerializedSize() uint32 {
 	}
 
 	return 0
+}
+
+func (column Column) SerializedSize() uint32 {
+	return 1 + column.StorageSize()
 }
 
 func (column Column) ValidateIntegerValue(value int64) bool {
