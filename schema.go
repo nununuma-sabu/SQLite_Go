@@ -105,9 +105,6 @@ func NewColumn(name string, declaredType string) Column {
 	if column.Affinity == AffinityText {
 		column.MaxLength = defaultTextSize
 	}
-	if strings.EqualFold(column.Name, idColumnName) && column.Affinity == AffinityInteger {
-		column.PrimaryKey = true
-	}
 
 	return column
 }

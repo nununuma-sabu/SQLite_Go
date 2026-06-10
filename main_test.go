@@ -214,7 +214,7 @@ func TestRunPrintsSyntaxErrorForInvalidSelectByID(t *testing.T) {
 func TestRunPrintsErrorForNegativeSelectID(t *testing.T) {
 	got := runTempScript(t, []string{"select -1", ".exit"})
 
-	want := "db > ID must be positive.\ndb > "
+	want := "db > Primary key must be positive.\ndb > "
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -322,7 +322,7 @@ func TestRunPrintsErrorForNegativeID(t *testing.T) {
 	})
 
 	want := strings.Join([]string{
-		"db > ID must be positive.",
+		"db > Primary key must be positive.",
 		"db > Executed.",
 		"db > ",
 	}, "\n")
@@ -383,6 +383,32 @@ func TestRunCreatesTableWithTablePrimaryKeyConstraint(t *testing.T) {
 		"db > Executed.",
 		"db > Executed.",
 		"db > Error: Duplicate key.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunUsesNamedPrimaryKeyColumnAsBTreeKey(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table accounts (id integer, account_id integer primary key, name text)",
+		"insert 10 2 Bob",
+		"insert 10 1 Alice",
+		"select",
+		"select 2",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (10, 1, Alice)",
+		"(10, 2, Bob)",
+		"Executed.",
+		"db > (10, 2, Bob)",
+		"Executed.",
 		"db > ",
 	}, "\n")
 	if got != want {

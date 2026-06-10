@@ -59,7 +59,7 @@ func run(in io.Reader, out io.Writer, table *Table) (code ExitCode) {
 		switch prepareStatement(input, &statement, table.Schema) {
 		case PrepareSuccess:
 		case PrepareNegativeID:
-			fmt.Fprintln(out, "ID must be positive.")
+			fmt.Fprintln(out, "Primary key must be positive.")
 			continue
 		case PrepareStringTooLong:
 			fmt.Fprintln(out, "String is too long.")

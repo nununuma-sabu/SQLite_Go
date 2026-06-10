@@ -89,6 +89,47 @@ func TestParseCreateTableWithConflictClauses(t *testing.T) {
 	}
 }
 
+func TestParseCreateTableKeepsImplicitIDPrimaryKeyCompatibility(t *testing.T) {
+	schema, ok := parseCreateTable("create table people (id integer, name text)")
+	if !ok {
+		t.Fatal("expected schema to parse")
+	}
+
+	primaryKeyColumn, ok := schema.PrimaryKeyColumn()
+	if !ok {
+		t.Fatal("expected primary key column")
+	}
+	if primaryKeyColumn.Name != idColumnName {
+		t.Fatalf("expected implicit primary key %q, got %q", idColumnName, primaryKeyColumn.Name)
+	}
+	if primaryKeyColumn.PrimaryKeyConstraint {
+		t.Fatal("expected implicit primary key not to be shown as explicit constraint")
+	}
+}
+
+func TestParseCreateTableAllowsIDAsNonPrimaryColumn(t *testing.T) {
+	schema, ok := parseCreateTable("create table accounts (id integer, account_id integer primary key, name text)")
+	if !ok {
+		t.Fatal("expected schema to parse")
+	}
+
+	primaryKeyColumn, ok := schema.PrimaryKeyColumn()
+	if !ok {
+		t.Fatal("expected primary key column")
+	}
+	if primaryKeyColumn.Name != "account_id" {
+		t.Fatalf("expected primary key %q, got %q", "account_id", primaryKeyColumn.Name)
+	}
+
+	idColumn, ok := schema.Column("id")
+	if !ok {
+		t.Fatal("expected id column")
+	}
+	if idColumn.PrimaryKey {
+		t.Fatal("expected id to remain a normal column")
+	}
+}
+
 func TestDefaultTableSchema(t *testing.T) {
 	schema := DefaultTableSchema()
 
@@ -179,7 +220,7 @@ func TestTableSchemaIsUsable(t *testing.T) {
 			schema: TableSchema{
 				Name: "people",
 				Columns: []Column{
-					NewColumn("id", "INTEGER"),
+					{Name: "id", DeclaredType: "INTEGER", Affinity: AffinityInteger, PrimaryKey: true},
 					NewColumn("name", "TEXT"),
 					NewColumn("height", "REAL"),
 					NewColumn("weight", "REAL"),
@@ -188,7 +229,7 @@ func TestTableSchemaIsUsable(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "missing id primary key is not usable",
+			name: "missing primary key is not usable",
 			schema: TableSchema{
 				Name: "people",
 				Columns: []Column{
@@ -202,7 +243,7 @@ func TestTableSchemaIsUsable(t *testing.T) {
 			schema: TableSchema{
 				Name: "people",
 				Columns: []Column{
-					NewColumn("id", "INTEGER"),
+					{Name: "id", DeclaredType: "INTEGER", Affinity: AffinityInteger, PrimaryKey: true},
 					NewColumn("name", "TEXT"),
 					NewColumn("Name", "TEXT"),
 				},
@@ -222,6 +263,7 @@ func TestTableSchemaIsUsable(t *testing.T) {
 
 func TestColumnValidation(t *testing.T) {
 	idColumn := NewColumn("id", "INTEGER")
+	idColumn.PrimaryKey = true
 	if !idColumn.ValidateIntegerValue(1) {
 		t.Fatal("expected positive integer to be valid")
 	}

@@ -174,7 +174,7 @@ db > .exit
 db > insert 1 alice
 Syntax error. Could not parse statement.
 db > insert -1 cstack foo@bar.com
-ID must be positive.
+Primary key must be positive.
 db > insert 1 user1 person1@example.com
 Executed.
 db > insert 1 user1 person1@example.com
@@ -245,6 +245,16 @@ Goのビルドキャッシュへ書き込めない環境では、`GOCACHE` を `
 ```bash
 GOCACHE=/tmp/go-build go test ./...
 ```
+
+## 段階的な拡張メモ
+
+固定長Rowと単一主キーB-Treeの前提を外していくため、以下の順で小さく進めます。
+
+1. `id` 固定をやめて、`PrimaryKeyColumn()` を常に使う。
+2. Rowの値取得・キー取得をスキーマベースに整理する。
+3. Rowシリアライズを可変長化する。
+4. leaf nodeセルを可変長化する。
+5. その後に複合主キー、NULL、DEFAULT、CHECK、インデックスへ進む。
 
 ## 今後の拡張案
 

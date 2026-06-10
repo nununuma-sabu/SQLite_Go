@@ -217,6 +217,7 @@ func parseCreateTable(input string) (TableSchema, bool) {
 			return TableSchema{}, false
 		}
 	}
+	applyImplicitIDPrimaryKey(columns)
 
 	schema := TableSchema{
 		Name:    tableName,
@@ -227,6 +228,21 @@ func parseCreateTable(input string) (TableSchema, bool) {
 	}
 
 	return schema, true
+}
+
+func applyImplicitIDPrimaryKey(columns []Column) {
+	for _, column := range columns {
+		if column.PrimaryKey {
+			return
+		}
+	}
+
+	for i := range columns {
+		if strings.EqualFold(columns[i].Name, idColumnName) && columns[i].Affinity == AffinityInteger {
+			columns[i].PrimaryKey = true
+			return
+		}
+	}
 }
 
 func splitSQLList(input string) ([]string, bool) {
@@ -422,17 +438,17 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 			return PrepareSyntaxError
 		}
 
-		id, err := strconv.ParseInt(fields[1], 10, 32)
+		key, err := strconv.ParseInt(fields[1], 10, 32)
 		if err != nil {
 			return PrepareSyntaxError
 		}
-		idColumn, ok := schema.PrimaryKeyColumn()
-		if !ok || !idColumn.ValidateIntegerValue(id) {
+		primaryKeyColumn, ok := schema.PrimaryKeyColumn()
+		if !ok || !primaryKeyColumn.ValidateIntegerValue(key) {
 			return PrepareNegativeID
 		}
 
-		selectByID := uint32(id)
-		statement.SelectByID = &selectByID
+		selectByKey := uint32(key)
+		statement.SelectByKey = &selectByKey
 		return PrepareSuccess
 	}
 
@@ -547,10 +563,10 @@ func tableIsEmpty(table *Table) bool {
 
 // selectステートメントを実行し、保存済みの全行を出力する。
 func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteResult {
-	if statement.SelectByID != nil {
-		cursor := tableFind(table, *statement.SelectByID)
+	if statement.SelectByKey != nil {
+		cursor := tableFind(table, *statement.SelectByKey)
 		node := getPage(table.Pager, cursor.PageNum)
-		if cursor.CellNum < leafNodeNumCells(node) && leafNodeKey(node, cursor.CellNum) == *statement.SelectByID {
+		if cursor.CellNum < leafNodeNumCells(node) && leafNodeKey(node, cursor.CellNum) == *statement.SelectByKey {
 			printRow(deserializeRow(cursorValue(cursor), table.Schema), table.Schema, out)
 		}
 		return ExecuteSuccess
