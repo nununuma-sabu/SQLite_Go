@@ -12,10 +12,7 @@ type Statement struct {
 
 // Row は1レコードを表す。
 type Row struct {
-	ID       uint32
-	Username string
-	Email    string
-	Values   map[string]Value
+	Values map[string]Value
 }
 
 // Value はRow内の1カラム値を表す。

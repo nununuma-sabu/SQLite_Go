@@ -38,6 +38,25 @@ func runTempScript(t *testing.T, commands []string) string {
 	return runScript(t, filepath.Join(t.TempDir(), "test.db"), commands)
 }
 
+func defaultRow(id uint32, username string, email string) Row {
+	return Row{
+		Values: map[string]Value{
+			idColumnName: {
+				StorageClass: StorageInteger,
+				Integer:      int64(id),
+			},
+			usernameColumnName: {
+				StorageClass: StorageText,
+				Text:         username,
+			},
+			emailColumnName: {
+				StorageClass: StorageText,
+				Text:         email,
+			},
+		},
+	}
+}
+
 func TestRunExitsOnExitCommand(t *testing.T) {
 	// .exit が入力されたら、未認識コマンドを出さずに終了する。
 	got := runTempScript(t, []string{".exit"})
@@ -894,12 +913,8 @@ func TestCursorPositions(t *testing.T) {
 	}
 
 	statement := &Statement{
-		Type: StatementInsert,
-		RowToInsert: Row{
-			ID:       1,
-			Username: "alice",
-			Email:    "alice@example.com",
-		},
+		Type:        StatementInsert,
+		RowToInsert: defaultRow(1, "alice", "alice@example.com"),
 	}
 	if got := executeInsert(statement, table); got != ExecuteSuccess {
 		t.Fatalf("expected execute result %d, got %d", ExecuteSuccess, got)
@@ -939,9 +954,9 @@ func TestLeafNodeFindReturnsInsertionPosition(t *testing.T) {
 	}()
 
 	for _, row := range []Row{
-		{ID: 1, Username: "user1", Email: "person1@example.com"},
-		{ID: 3, Username: "user3", Email: "person3@example.com"},
-		{ID: 5, Username: "user5", Email: "person5@example.com"},
+		defaultRow(1, "user1", "person1@example.com"),
+		defaultRow(3, "user3", "person3@example.com"),
+		defaultRow(5, "user5", "person5@example.com"),
 	} {
 		statement := &Statement{Type: StatementInsert, RowToInsert: row}
 		if got := executeInsert(statement, table); got != ExecuteSuccess {
@@ -982,12 +997,8 @@ func TestExecuteInsertSplitsRootLeaf(t *testing.T) {
 	}()
 	for i := uint32(1); i <= leafNodeMaxCells+1; i++ {
 		statement := &Statement{
-			Type: StatementInsert,
-			RowToInsert: Row{
-				ID:       i,
-				Username: fmt.Sprintf("user%d", i),
-				Email:    fmt.Sprintf("person%d@example.com", i),
-			},
+			Type:        StatementInsert,
+			RowToInsert: defaultRow(i, fmt.Sprintf("user%d", i), fmt.Sprintf("person%d@example.com", i)),
 		}
 		if got := executeInsert(statement, table); got != ExecuteSuccess {
 			t.Fatalf("expected execute result %d, got %d", ExecuteSuccess, got)
@@ -1007,17 +1018,15 @@ func TestExecuteInsertSplitsRootLeaf(t *testing.T) {
 }
 
 func TestSerializeAndDeserializeRow(t *testing.T) {
-	row := Row{
-		ID:       1,
-		Username: "alice",
-		Email:    "alice@example.com",
-	}
+	row := defaultRow(1, "alice", "alice@example.com")
 	storage := make([]byte, rowSize)
 
 	serializeRow(row, DefaultTableSchema(), storage)
 	got := deserializeRow(storage, DefaultTableSchema())
 
-	if got.ID != row.ID || got.Username != row.Username || got.Email != row.Email {
-		t.Fatalf("expected row %#v, got %#v", row, got)
+	for _, column := range DefaultTableSchema().Columns {
+		if !valuesEqual(rowValue(got, column), rowValue(row, column)) {
+			t.Fatalf("expected row %#v, got %#v", row, got)
+		}
 	}
 }

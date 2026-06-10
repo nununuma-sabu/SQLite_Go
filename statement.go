@@ -33,11 +33,6 @@ func prepareInsert(input string, statement *Statement, schema TableSchema) Prepa
 		return PrepareSyntaxError
 	}
 
-	primaryKeyColumn, ok := schema.PrimaryKeyColumn()
-	if !ok {
-		return PrepareSyntaxError
-	}
-
 	statement.RowToInsert = Row{
 		Values: make(map[string]Value, len(schema.Columns)),
 	}
@@ -50,15 +45,6 @@ func prepareInsert(input string, statement *Statement, schema TableSchema) Prepa
 		}
 
 		statement.RowToInsert.Values[column.Name] = value
-		if strings.EqualFold(column.Name, primaryKeyColumn.Name) {
-			statement.RowToInsert.ID = uint32(value.Integer)
-		}
-		switch strings.ToLower(column.Name) {
-		case usernameColumnName:
-			statement.RowToInsert.Username = value.Text
-		case emailColumnName:
-			statement.RowToInsert.Email = value.Text
-		}
 	}
 
 	return PrepareSuccess
@@ -484,7 +470,10 @@ func parseColumnValue(rawValue string, column Column) (Value, PrepareResult) {
 
 // insertステートメントを実行し、B-Tree内の適切な位置へ行を追加する。
 func executeInsert(statement *Statement, table *Table) ExecuteResult {
-	keyToInsert := statement.RowToInsert.ID
+	keyToInsert, ok := rowKey(statement.RowToInsert, table.Schema)
+	if !ok {
+		return ExecuteConstraintViolation
+	}
 	cursor := tableFind(table, keyToInsert)
 	leafNode := getPage(table.Pager, cursor.PageNum)
 	numCells := leafNodeNumCells(leafNode)

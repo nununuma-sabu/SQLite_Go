@@ -70,21 +70,12 @@ func deserializeRow(source []byte, schema TableSchema) Row {
 		case AffinityInteger:
 			value.StorageClass = StorageInteger
 			value.Integer = int64(binary.LittleEndian.Uint32(source[start:end]))
-			if column.PrimaryKey {
-				row.ID = uint32(value.Integer)
-			}
 		case AffinityReal:
 			value.StorageClass = StorageReal
 			value.Real = math.Float64frombits(binary.LittleEndian.Uint64(source[start:end]))
 		case AffinityText:
 			value.StorageClass = StorageText
 			value.Text = readFixedString(source[start:end])
-			switch strings.ToLower(column.Name) {
-			case usernameColumnName:
-				row.Username = value.Text
-			case emailColumnName:
-				row.Email = value.Text
-			}
 		default:
 			value.StorageClass = StorageNull
 		}
@@ -105,21 +96,25 @@ func mustColumnRange(layout RowLayout, columnName string) (uint32, uint32) {
 }
 
 func rowValue(row Row, column Column) Value {
-	if column.PrimaryKey {
-		return Value{StorageClass: StorageInteger, Integer: int64(row.ID)}
-	}
 	if value, ok := row.Values[column.Name]; ok {
 		return value
 	}
 
-	switch strings.ToLower(column.Name) {
-	case usernameColumnName:
-		return Value{StorageClass: StorageText, Text: row.Username}
-	case emailColumnName:
-		return Value{StorageClass: StorageText, Text: row.Email}
+	return Value{StorageClass: StorageNull}
+}
+
+func rowKey(row Row, schema TableSchema) (uint32, bool) {
+	primaryKeyColumn, ok := schema.PrimaryKeyColumn()
+	if !ok {
+		return 0, false
 	}
 
-	return Value{StorageClass: StorageNull}
+	value := rowValue(row, primaryKeyColumn)
+	if value.StorageClass != StorageInteger || !primaryKeyColumn.ValidateIntegerValue(value.Integer) {
+		return 0, false
+	}
+
+	return uint32(value.Integer), true
 }
 
 func formatRowValue(row Row, column Column) string {
