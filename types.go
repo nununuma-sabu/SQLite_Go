@@ -9,8 +9,23 @@ type Statement struct {
 	SelectByKey   *uint32
 	SelectColumns []Column
 	SelectWhere   WhereExpression
+	SelectOrderBy *OrderByClause
 	Schema        TableSchema
 }
+
+// OrderByClause はSELECTのORDER BY指定を表す。
+type OrderByClause struct {
+	Column    Column
+	Direction SortDirection
+}
+
+// SortDirection はORDER BYの昇順・降順を表す。
+type SortDirection int
+
+const (
+	SortAscending SortDirection = iota
+	SortDescending
+)
 
 // WhereExpression はWHERE条件式を表す。
 type WhereExpression struct {

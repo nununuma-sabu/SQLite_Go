@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -427,6 +428,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 			}
 			statement.SelectColumns = selectClause.Columns
 			statement.SelectWhere = selectClause.Where
+			statement.SelectOrderBy = selectClause.OrderBy
 			return PrepareSuccess
 		}
 
@@ -460,6 +462,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 type selectClause struct {
 	Columns []Column
 	Where   WhereExpression
+	OrderBy *OrderByClause
 }
 
 func parseSelectStatement(input string, schema TableSchema) (selectClause, PrepareResult) {
@@ -479,7 +482,23 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	}
 
 	columnList := strings.TrimSpace(body[:fromIndex])
-	tableAndWhere := strings.TrimSpace(body[fromIndex+len(" from "):])
+	tableWhereAndOrder := strings.TrimSpace(body[fromIndex+len(" from "):])
+	orderByIndex := findSelectOrderByIndex(tableWhereAndOrder)
+	tableAndWhere := tableWhereAndOrder
+	var orderBy *OrderByClause
+	if orderByIndex >= 0 {
+		tableAndWhere = strings.TrimSpace(tableWhereAndOrder[:orderByIndex])
+		orderByInput := strings.TrimSpace(tableWhereAndOrder[orderByIndex+len(" order by "):])
+		if orderByInput == "" {
+			return selectClause{}, PrepareSyntaxError
+		}
+		clause, result := parseOrderByClause(orderByInput, schema)
+		if result != PrepareSuccess {
+			return selectClause{}, result
+		}
+		orderBy = &clause
+	}
+
 	whereIndex := findSelectWhereIndex(tableAndWhere)
 	tableName := tableAndWhere
 	var where WhereExpression
@@ -500,7 +519,7 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	}
 
 	if columnList == "*" {
-		return selectClause{Columns: schema.Columns, Where: where}, PrepareSuccess
+		return selectClause{Columns: schema.Columns, Where: where, OrderBy: orderBy}, PrepareSuccess
 	}
 
 	columnNames, ok := splitSQLList(columnList)
@@ -520,7 +539,7 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		columns = append(columns, column)
 	}
 
-	return selectClause{Columns: columns, Where: where}, PrepareSuccess
+	return selectClause{Columns: columns, Where: where, OrderBy: orderBy}, PrepareSuccess
 }
 
 func findSelectFromIndex(body string) int {
@@ -561,6 +580,52 @@ func findSelectWhereIndex(body string) int {
 	}
 
 	return -1
+}
+
+func findSelectOrderByIndex(body string) int {
+	lower := strings.ToLower(body)
+	inString := false
+	for i := 0; i <= len(lower)-len(" order by "); i++ {
+		if body[i] == '\'' {
+			if inString && i+1 < len(body) && body[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if !inString && strings.HasPrefix(lower[i:], " order by ") {
+			return i
+		}
+	}
+
+	return -1
+}
+
+func parseOrderByClause(input string, schema TableSchema) (OrderByClause, PrepareResult) {
+	fields := strings.Fields(input)
+	if len(fields) < 1 || len(fields) > 2 {
+		return OrderByClause{}, PrepareSyntaxError
+	}
+
+	column, ok := schema.Column(fields[0])
+	if !ok {
+		return OrderByClause{}, PrepareSyntaxError
+	}
+
+	direction := SortAscending
+	if len(fields) == 2 {
+		switch {
+		case strings.EqualFold(fields[1], "asc"):
+			direction = SortAscending
+		case strings.EqualFold(fields[1], "desc"):
+			direction = SortDescending
+		default:
+			return OrderByClause{}, PrepareSyntaxError
+		}
+	}
+
+	return OrderByClause{Column: column, Direction: direction}, PrepareSuccess
 }
 
 func parseWhereExpression(input string, schema TableSchema) (WhereExpression, PrepareResult) {
@@ -988,6 +1053,15 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	if len(columns) == 0 {
 		columns = table.Schema.Columns
 	}
+	if statement.SelectOrderBy != nil {
+		rows := selectRows(statement, table)
+		sortRows(rows, *statement.SelectOrderBy)
+		for _, row := range rows {
+			printColumns(row, columns, out)
+		}
+		return ExecuteSuccess
+	}
+
 	if statement.SelectByKey != nil {
 		cursor := tableFind(table, *statement.SelectByKey)
 		node := getPage(table.Pager, cursor.PageNum)
@@ -1010,6 +1084,61 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	}
 
 	return ExecuteSuccess
+}
+
+func selectRows(statement *Statement, table *Table) []Row {
+	if statement.SelectByKey != nil {
+		cursor := tableFind(table, *statement.SelectByKey)
+		node := getPage(table.Pager, cursor.PageNum)
+		if cursor.CellNum < leafNodeNumCells(node) && leafNodeKey(node, cursor.CellNum) == *statement.SelectByKey {
+			row := deserializeRow(cursorValue(cursor), table.Schema)
+			if rowMatchesWhere(row, statement.SelectWhere) {
+				return []Row{row}
+			}
+		}
+		return nil
+	}
+
+	rows := []Row{}
+	cursor := tableStart(table)
+	for !cursor.EndOfTable {
+		row := deserializeRow(cursorValue(cursor), table.Schema)
+		if rowMatchesWhere(row, statement.SelectWhere) {
+			rows = append(rows, row)
+		}
+		cursorAdvance(cursor)
+	}
+
+	return rows
+}
+
+func sortRows(rows []Row, orderBy OrderByClause) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		comparison := compareOrderByValues(rowValue(rows[i], orderBy.Column), rowValue(rows[j], orderBy.Column))
+		if orderBy.Direction == SortDescending {
+			return comparison > 0
+		}
+		return comparison < 0
+	})
+}
+
+func compareOrderByValues(left Value, right Value) int {
+	if left.StorageClass == StorageNull && right.StorageClass == StorageNull {
+		return 0
+	}
+	if left.StorageClass == StorageNull {
+		return -1
+	}
+	if right.StorageClass == StorageNull {
+		return 1
+	}
+
+	comparison, ok := compareValues(left, right)
+	if !ok {
+		return 0
+	}
+
+	return comparison
 }
 
 func rowMatchesWhere(row Row, expression WhereExpression) bool {

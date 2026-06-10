@@ -145,6 +145,21 @@ Executed.
 db >
 ```
 
+`order by` で結果を並び替えできます。
+方向は `asc` / `desc` を指定でき、省略時は `asc` です。
+
+```text
+db > select username, email from users order by username desc;
+(bob, bob@example.com)
+(alice, alice@example.com)
+Executed.
+db > select username from users where id >= 1 order by id asc;
+(alice)
+(bob)
+Executed.
+db >
+```
+
 `select <id>` は指定したIDのレコードだけを表示します。
 
 ```text

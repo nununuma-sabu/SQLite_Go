@@ -462,6 +462,67 @@ func TestRunExecutesSelectWhereParenthesizedConditions(t *testing.T) {
 	}
 }
 
+func TestRunExecutesSelectOrderByAscAndDesc(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real, nickname text)",
+		"insert 1 Alice 165.2 null",
+		"insert 2 Bob 172.4 Bobby",
+		"insert 3 Carol 158.9 null",
+		"SELECT name, height FROM people ORDER BY height ASC;",
+		"SELECT name FROM people ORDER BY name DESC;",
+		"SELECT id, nickname FROM people ORDER BY nickname ASC;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (Carol, 158.9)",
+		"(Alice, 165.2)",
+		"(Bob, 172.4)",
+		"Executed.",
+		"db > (Carol)",
+		"(Bob)",
+		"(Alice)",
+		"Executed.",
+		"db > (1, NULL)",
+		"(3, NULL)",
+		"(2, Bobby)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesSelectWhereOrderBy(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real)",
+		"insert 1 Alice 165.2",
+		"insert 2 Bob 172.4",
+		"insert 3 Carol 158.9",
+		"SELECT name FROM people WHERE id = 1 OR height < 170 ORDER BY height DESC;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (Alice)",
+		"(Carol)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesSelectColumnsFromCustomTable(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table tbl1 (id integer primary key, column1 text, column2 real)",
@@ -492,10 +553,14 @@ func TestRunPrintsSyntaxErrorForInvalidSelectFrom(t *testing.T) {
 		"SELECT * FROM users WHERE id = 1 OR;",
 		"SELECT * FROM users WHERE (id = 1 OR id = 2;",
 		"SELECT * FROM users WHERE id = 1);",
+		"SELECT * FROM users ORDER BY missing;",
+		"SELECT * FROM users ORDER BY id SIDEWAYS;",
 		".exit",
 	})
 
 	want := strings.Join([]string{
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
