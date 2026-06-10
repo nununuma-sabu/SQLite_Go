@@ -24,6 +24,11 @@ type WhereOperator int
 
 const (
 	WhereEqual WhereOperator = iota
+	WhereNotEqual
+	WhereLessThan
+	WhereLessThanOrEqual
+	WhereGreaterThan
+	WhereGreaterThanOrEqual
 	WhereIsNull
 	WhereIsNotNull
 )

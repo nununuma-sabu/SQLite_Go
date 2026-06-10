@@ -334,6 +334,43 @@ func TestRunExecutesSelectWhereIsNull(t *testing.T) {
 	}
 }
 
+func TestRunExecutesSelectWhereComparisonOperators(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real)",
+		"insert 1 Alice 165.2",
+		"insert 2 Bob 172.4",
+		"insert 3 Carol 158.9",
+		"SELECT name FROM people WHERE height >= 165.2;",
+		"SELECT name FROM people WHERE id <> 2;",
+		"SELECT id FROM people WHERE name > 'Alice';",
+		"SELECT id FROM people WHERE id!=1;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > (Alice)",
+		"(Bob)",
+		"Executed.",
+		"db > (Alice)",
+		"(Carol)",
+		"Executed.",
+		"db > (2)",
+		"(3)",
+		"Executed.",
+		"db > (2)",
+		"(3)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesSelectColumnsFromCustomTable(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table tbl1 (id integer primary key, column1 text, column2 real)",

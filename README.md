@@ -46,6 +46,12 @@ SQLファイルを実行する場合は、DBファイル名の後ろにSQLファ
 go run . test.db setup.sql
 ```
 
+WHERE句の動作確認用サンプルもあります。
+
+```bash
+go run . /tmp/where-test.db examples/where_conditions.sql
+```
+
 ## クイック例
 
 ```text

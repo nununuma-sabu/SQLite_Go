@@ -584,7 +584,8 @@ func parseWhereCondition(input string, schema TableSchema) (WhereCondition, Prep
 		return WhereCondition{}, PrepareSyntaxError
 	}
 
-	if tokens[1].Value != "=" || len(tokens) != 3 {
+	operator, ok := parseWhereComparisonOperator(tokens[1].Value)
+	if !ok || len(tokens) != 3 {
 		return WhereCondition{}, PrepareSyntaxError
 	}
 	if !tokens[2].Quoted && strings.EqualFold(tokens[2].Value, "null") {
@@ -595,7 +596,26 @@ func parseWhereCondition(input string, schema TableSchema) (WhereCondition, Prep
 		return WhereCondition{}, result
 	}
 
-	return WhereCondition{Column: column, Operator: WhereEqual, Value: value}, PrepareSuccess
+	return WhereCondition{Column: column, Operator: operator, Value: value}, PrepareSuccess
+}
+
+func parseWhereComparisonOperator(input string) (WhereOperator, bool) {
+	switch input {
+	case "=":
+		return WhereEqual, true
+	case "!=", "<>":
+		return WhereNotEqual, true
+	case "<":
+		return WhereLessThan, true
+	case "<=":
+		return WhereLessThanOrEqual, true
+	case ">":
+		return WhereGreaterThan, true
+	case ">=":
+		return WhereGreaterThanOrEqual, true
+	default:
+		return WhereEqual, false
+	}
 }
 
 func parseWhereTokens(input string) ([]insertField, bool) {
@@ -621,14 +641,18 @@ func parseWhereTokens(input string) ([]insertField, bool) {
 			continue
 		}
 
-		if input[i] == '=' {
-			tokens = append(tokens, insertField{Value: "="})
-			i++
+		if isWhereOperatorByte(input[i]) {
+			operator, next, ok := parseWhereOperatorToken(input, i)
+			if !ok {
+				return nil, false
+			}
+			tokens = append(tokens, insertField{Value: operator})
+			i = next
 			continue
 		}
 
 		start := i
-		for i < len(input) && !unicode.IsSpace(rune(input[i])) && input[i] != '=' {
+		for i < len(input) && !unicode.IsSpace(rune(input[i])) && !isWhereOperatorByte(input[i]) {
 			if input[i] == '\'' {
 				return nil, false
 			}
@@ -638,6 +662,27 @@ func parseWhereTokens(input string) ([]insertField, bool) {
 	}
 
 	return tokens, true
+}
+
+func isWhereOperatorByte(value byte) bool {
+	return value == '=' || value == '!' || value == '<' || value == '>'
+}
+
+func parseWhereOperatorToken(input string, start int) (string, int, bool) {
+	if start+1 < len(input) {
+		token := input[start : start+2]
+		switch token {
+		case "!=", "<>", "<=", ">=":
+			return token, start + 2, true
+		}
+	}
+
+	switch input[start] {
+	case '=', '<', '>':
+		return input[start : start+1], start + 1, true
+	default:
+		return "", 0, false
+	}
 }
 
 func parseColumnValue(field insertField, column Column) (Value, PrepareResult) {
@@ -740,6 +785,37 @@ func valuesEqual(left Value, right Value) bool {
 	}
 }
 
+func compareValues(left Value, right Value) (int, bool) {
+	if left.StorageClass != right.StorageClass {
+		return 0, false
+	}
+
+	switch left.StorageClass {
+	case StorageInteger:
+		switch {
+		case left.Integer < right.Integer:
+			return -1, true
+		case left.Integer > right.Integer:
+			return 1, true
+		default:
+			return 0, true
+		}
+	case StorageReal:
+		switch {
+		case left.Real < right.Real:
+			return -1, true
+		case left.Real > right.Real:
+			return 1, true
+		default:
+			return 0, true
+		}
+	case StorageText:
+		return strings.Compare(left.Text, right.Text), true
+	default:
+		return 0, false
+	}
+}
+
 func executeCreateTable(statement *Statement, table *Table) ExecuteResult {
 	if !tableIsEmpty(table) {
 		return ExecuteTableNotEmpty
@@ -798,6 +874,23 @@ func rowMatchesWhere(row Row, condition *WhereCondition) bool {
 	switch condition.Operator {
 	case WhereEqual:
 		return valuesEqual(value, condition.Value)
+	case WhereNotEqual:
+		if value.StorageClass == StorageNull {
+			return false
+		}
+		return !valuesEqual(value, condition.Value)
+	case WhereLessThan:
+		comparison, ok := compareValues(value, condition.Value)
+		return ok && comparison < 0
+	case WhereLessThanOrEqual:
+		comparison, ok := compareValues(value, condition.Value)
+		return ok && comparison <= 0
+	case WhereGreaterThan:
+		comparison, ok := compareValues(value, condition.Value)
+		return ok && comparison > 0
+	case WhereGreaterThanOrEqual:
+		comparison, ok := compareValues(value, condition.Value)
+		return ok && comparison >= 0
 	case WhereIsNull:
 		return value.StorageClass == StorageNull
 	case WhereIsNotNull:
