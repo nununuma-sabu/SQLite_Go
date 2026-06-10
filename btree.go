@@ -157,29 +157,29 @@ func leafNodeSplitAndInsert(cursor *Cursor, key uint32, value Row) {
 	setLeafNodeNextLeaf(newNode, leafNodeNextLeaf(oldNode))
 	setLeafNodeNextLeaf(oldNode, newPageNum)
 
-	for i := int(leafNodeMaxCells); i >= 0; i-- {
-		var destinationNode []byte
-		if uint32(i) >= leafNodeLeftSplitCount {
-			destinationNode = newNode
-		} else {
-			destinationNode = oldNode
+	cells := leafNodeCells(oldNode)
+	payload := make([]byte, serializedRowSize(value, cursor.Table.Schema))
+	serializeRow(value, cursor.Table.Schema, payload)
+	cells = append(cells, leafCell{})
+	insertIndex := int(cursor.CellNum)
+	copy(cells[insertIndex+1:], cells[insertIndex:])
+	cells[insertIndex] = leafCell{Key: key, Payload: payload}
+
+	clearLeafNodeCells(oldNode)
+	clearLeafNodeCells(newNode)
+
+	leftSplitCount := uint32((len(cells) + 1) / 2)
+	for i, cell := range cells {
+		if uint32(i) < leftSplitCount {
+			leafNodeWritePayloadCell(oldNode, uint32(i), cell.Key, cell.Payload)
+			setLeafNodeNumCells(oldNode, uint32(i)+1)
+			continue
 		}
 
-		indexWithinNode := uint32(i) % leafNodeLeftSplitCount
-		destination := leafNodeCell(destinationNode, indexWithinNode)
-
-		if uint32(i) == cursor.CellNum {
-			setLeafNodeKey(destinationNode, indexWithinNode, key)
-			serializeRow(value, cursor.Table.Schema, leafNodeValue(destinationNode, indexWithinNode))
-		} else if uint32(i) > cursor.CellNum {
-			copy(destination, leafNodeCell(oldNode, uint32(i)-1))
-		} else {
-			copy(destination, leafNodeCell(oldNode, uint32(i)))
-		}
+		indexWithinNode := uint32(i) - leftSplitCount
+		leafNodeWritePayloadCell(newNode, indexWithinNode, cell.Key, cell.Payload)
+		setLeafNodeNumCells(newNode, indexWithinNode+1)
 	}
-
-	setLeafNodeNumCells(oldNode, leafNodeLeftSplitCount)
-	setLeafNodeNumCells(newNode, leafNodeRightSplitCount)
 
 	if isNodeRoot(oldNode) {
 		createNewRoot(cursor.Table, newPageNum)
@@ -194,23 +194,42 @@ func leafNodeSplitAndInsert(cursor *Cursor, key uint32, value Row) {
 	internalNodeInsert(cursor.Table, parentPageNum, newPageNum)
 }
 
+type leafCell struct {
+	Key     uint32
+	Payload []byte
+}
+
+func leafNodeCells(node []byte) []leafCell {
+	numCells := leafNodeNumCells(node)
+	cells := make([]leafCell, 0, numCells)
+	for i := uint32(0); i < numCells; i++ {
+		payload := leafNodeValue(node, i)
+		payloadCopy := make([]byte, len(payload))
+		copy(payloadCopy, payload)
+		cells = append(cells, leafCell{
+			Key:     leafNodeKey(node, i),
+			Payload: payloadCopy,
+		})
+	}
+
+	return cells
+}
+
 // leaf nodeへキーとRowを挿入する。
 func leafNodeInsert(cursor *Cursor, key uint32, value Row) {
 	node := getPage(cursor.Table.Pager, cursor.PageNum)
 	numCells := leafNodeNumCells(node)
-	if numCells >= leafNodeMaxCells {
+	payloadSize := serializedRowSize(value, cursor.Table.Schema)
+	if !leafNodeCanFit(node, payloadSize) {
 		leafNodeSplitAndInsert(cursor, key, value)
 		return
 	}
 
 	if cursor.CellNum < numCells {
 		// 挿入位置より後ろのセルを1つずつ後方へずらして空きを作る。
-		for i := numCells; i > cursor.CellNum; i-- {
-			copy(leafNodeCell(node, i), leafNodeCell(node, i-1))
-		}
+		leafNodeShiftCellPointersRight(node, cursor.CellNum, numCells)
 	}
 
 	setLeafNodeNumCells(node, numCells+1)
-	setLeafNodeKey(node, cursor.CellNum, key)
-	serializeRow(value, cursor.Table.Schema, leafNodeValue(node, cursor.CellNum))
+	leafNodeWriteCell(node, cursor.CellNum, key, value, cursor.Table.Schema)
 }

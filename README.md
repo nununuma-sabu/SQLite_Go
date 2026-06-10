@@ -253,7 +253,7 @@ GOCACHE=/tmp/go-build go test ./...
 1. 完了: `id` 固定をやめて、`PrimaryKeyColumn()` を常に使う。
 2. 完了: Rowの値取得・キー取得をスキーマベースに整理する。
 3. 完了: Rowシリアライズを可変長化する。
-4. leaf nodeセルを可変長化する。
+4. 完了: leaf nodeセルを可変長化する。
 5. その後に複合主キー、NULL、DEFAULT、CHECK、インデックスへ進む。
 
 ## 今後の拡張案

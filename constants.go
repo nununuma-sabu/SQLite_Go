@@ -15,9 +15,10 @@ const (
 var (
 	rowSize                 uint32 = DefaultTableSchema().SerializedRowSize()
 	leafNodeValueSize       uint32 = rowSize
-	leafNodeCellSize        uint32 = leafNodeKeySize + leafNodeValueSize
+	leafNodeCellSize        uint32 = leafNodeValueOffset + leafNodeValueSize
 	leafNodeSpaceForCells   uint32 = pageSize - leafNodeHeaderSize
-	leafNodeMaxCells        uint32 = leafNodeSpaceForCells / leafNodeCellSize
+	leafNodeMaxPayloadSize  uint32 = leafNodeSpaceForCells - leafNodeCellPointerSize - leafNodeValueOffset
+	leafNodeMaxCells        uint32 = leafNodeSpaceForCells / (leafNodeCellPointerSize + leafNodeCellSize)
 	leafNodeRightSplitCount uint32 = (leafNodeMaxCells + 1) / 2
 	leafNodeLeftSplitCount  uint32 = (leafNodeMaxCells + 1) - leafNodeRightSplitCount
 )
@@ -29,22 +30,27 @@ const (
 	metadataPageNum           = 0
 	defaultRootPageNum        = 1
 
-	nodeTypeSize           = 1
-	nodeTypeOffset         = 0
-	isRootSize             = 1
-	isRootOffset           = nodeTypeOffset + nodeTypeSize
-	parentPointerSize      = 4
-	parentPointerOffset    = isRootOffset + isRootSize
-	commonNodeHeaderSize   = nodeTypeSize + isRootSize + parentPointerSize
-	leafNodeNumCellsSize   = 4
-	leafNodeNumCellsOffset = commonNodeHeaderSize
-	leafNodeNextLeafSize   = 4
-	leafNodeNextLeafOffset = leafNodeNumCellsOffset + leafNodeNumCellsSize
-	leafNodeHeaderSize     = commonNodeHeaderSize + leafNodeNumCellsSize + leafNodeNextLeafSize
+	nodeTypeSize               = 1
+	nodeTypeOffset             = 0
+	isRootSize                 = 1
+	isRootOffset               = nodeTypeOffset + nodeTypeSize
+	parentPointerSize          = 4
+	parentPointerOffset        = isRootOffset + isRootSize
+	commonNodeHeaderSize       = nodeTypeSize + isRootSize + parentPointerSize
+	leafNodeNumCellsSize       = 4
+	leafNodeNumCellsOffset     = commonNodeHeaderSize
+	leafNodeNextLeafSize       = 4
+	leafNodeNextLeafOffset     = leafNodeNumCellsOffset + leafNodeNumCellsSize
+	leafNodeContentStartSize   = 2
+	leafNodeContentStartOffset = leafNodeNextLeafOffset + leafNodeNextLeafSize
+	leafNodeHeaderSize         = commonNodeHeaderSize + leafNodeNumCellsSize + leafNodeNextLeafSize + leafNodeContentStartSize
 
-	leafNodeKeySize     = 4
-	leafNodeKeyOffset   = 0
-	leafNodeValueOffset = leafNodeKeyOffset + leafNodeKeySize
+	leafNodeKeySize           = 4
+	leafNodeKeyOffset         = 0
+	leafNodePayloadSizeSize   = 4
+	leafNodePayloadSizeOffset = leafNodeKeyOffset + leafNodeKeySize
+	leafNodeValueOffset       = leafNodePayloadSizeOffset + leafNodePayloadSizeSize
+	leafNodeCellPointerSize   = 2
 
 	internalNodeNumKeysSize      = 4
 	internalNodeNumKeysOffset    = commonNodeHeaderSize

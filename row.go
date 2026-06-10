@@ -37,6 +37,23 @@ func readFixedString(source []byte) string {
 	return string(source)
 }
 
+func serializedRowSize(row Row, schema TableSchema) uint32 {
+	size := uint32(len(rowRecordFormatMagic))
+	for _, column := range schema.Columns {
+		value := rowValue(row, column)
+		switch column.Affinity {
+		case AffinityInteger:
+			size += idSize
+		case AffinityReal:
+			size += 8
+		case AffinityText:
+			size += 1 + uint32(len(value.Text))
+		}
+	}
+
+	return size
+}
+
 // Rowをページ内に保存できる固定長のバイト列へ変換する。
 func serializeRow(source Row, schema TableSchema, destination []byte) {
 	clear(destination)

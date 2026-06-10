@@ -58,6 +58,14 @@ func defaultRow(id uint32, username string, email string) Row {
 	}
 }
 
+func maxSizeRow(id uint32) Row {
+	return defaultRow(id, strings.Repeat("u", columnUsernameSize), strings.Repeat("e", columnEmailSize))
+}
+
+func maxSizeInsertCommand(id uint32) string {
+	return fmt.Sprintf("insert %d %s %s", id, strings.Repeat("u", columnUsernameSize), strings.Repeat("e", columnEmailSize))
+}
+
 func TestRunExitsOnExitCommand(t *testing.T) {
 	// .exit が入力されたら、未認識コマンドを出さずに終了する。
 	got := runTempScript(t, []string{".exit"})
@@ -552,9 +560,29 @@ func TestRunRejectsCreateTableWhenTableHasRows(t *testing.T) {
 	}
 }
 
-func TestRunRejectsRowsLargerThanCurrentCellLayout(t *testing.T) {
+func TestRunAllowsRowsLargerThanDefaultRowSizeWhenTheyFitLeafPage(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table huge (id integer, first_name text, last_name text)",
+		"insert 1 Alice Smith",
+		"select",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > (1, Alice, Smith)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunRejectsRowsLargerThanLeafPage(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table too_huge (id integer, c1 text, c2 text, c3 text, c4 text, c5 text, c6 text, c7 text, c8 text, c9 text, c10 text, c11 text, c12 text, c13 text, c14 text, c15 text, c16 text)",
 		".exit",
 	})
 
@@ -576,7 +604,7 @@ func TestRunPrintsSevenLeafNodeBTree(t *testing.T) {
 	}
 	commands := make([]string, 0, len(ids)+2)
 	for _, id := range ids {
-		commands = append(commands, fmt.Sprintf("insert %d user%d person%d@example.com", id, id, id))
+		commands = append(commands, maxSizeInsertCommand(id))
 	}
 	commands = append(commands, ".btree")
 	commands = append(commands, ".exit")
@@ -732,10 +760,10 @@ func TestRunPrintsOneNodeBTree(t *testing.T) {
 func TestRunPrintsThreeLeafNodeBTree(t *testing.T) {
 	commands := make([]string, 0, 16)
 	for i := uint32(1); i <= leafNodeMaxCells+1; i++ {
-		commands = append(commands, fmt.Sprintf("insert %d user%d person%d@example.com", i, i, i))
+		commands = append(commands, maxSizeInsertCommand(i))
 	}
 	commands = append(commands, ".btree")
-	commands = append(commands, "insert 15 user15 person15@example.com")
+	commands = append(commands, maxSizeInsertCommand(15))
 	commands = append(commands, ".exit")
 
 	got := runScriptWithExpectedCode(t, filepath.Join(t.TempDir(), "test.db"), commands, ExitSuccess)
@@ -782,7 +810,7 @@ func TestRunPrintsFourLeafNodeBTree(t *testing.T) {
 	}
 	commands := make([]string, 0, len(ids)+2)
 	for _, id := range ids {
-		commands = append(commands, fmt.Sprintf("insert %d user%d person%d@example.com", id, id, id))
+		commands = append(commands, maxSizeInsertCommand(id))
 	}
 	commands = append(commands, ".btree")
 	commands = append(commands, ".exit")
@@ -845,9 +873,9 @@ func TestRunPrintsFourLeafNodeBTree(t *testing.T) {
 func TestRunDetectsDuplicateIDAfterRootSplit(t *testing.T) {
 	commands := make([]string, 0, 17)
 	for i := uint32(1); i <= leafNodeMaxCells+1; i++ {
-		commands = append(commands, fmt.Sprintf("insert %d user%d person%d@example.com", i, i, i))
+		commands = append(commands, maxSizeInsertCommand(i))
 	}
-	commands = append(commands, "insert 14 user14 person14@example.com")
+	commands = append(commands, maxSizeInsertCommand(14))
 	commands = append(commands, ".exit")
 
 	got := runScript(t, filepath.Join(t.TempDir(), "test.db"), commands)
@@ -886,9 +914,9 @@ func TestRunPrintsConstants(t *testing.T) {
 		"db > Constants:",
 		"ROW_SIZE: 297",
 		"COMMON_NODE_HEADER_SIZE: 6",
-		"LEAF_NODE_HEADER_SIZE: 14",
-		"LEAF_NODE_CELL_SIZE: 301",
-		"LEAF_NODE_SPACE_FOR_CELLS: 4082",
+		"LEAF_NODE_HEADER_SIZE: 16",
+		"LEAF_NODE_CELL_SIZE: 305",
+		"LEAF_NODE_SPACE_FOR_CELLS: 4080",
 		"LEAF_NODE_MAX_CELLS: 13",
 		"db > ",
 	}, "\n")
@@ -999,7 +1027,7 @@ func TestExecuteInsertSplitsRootLeaf(t *testing.T) {
 	for i := uint32(1); i <= leafNodeMaxCells+1; i++ {
 		statement := &Statement{
 			Type:        StatementInsert,
-			RowToInsert: defaultRow(i, fmt.Sprintf("user%d", i), fmt.Sprintf("person%d@example.com", i)),
+			RowToInsert: maxSizeRow(i),
 		}
 		if got := executeInsert(statement, table); got != ExecuteSuccess {
 			t.Fatalf("expected execute result %d, got %d", ExecuteSuccess, got)
@@ -1015,6 +1043,36 @@ func TestExecuteInsertSplitsRootLeaf(t *testing.T) {
 	}
 	if got := internalNodeKey(root, 0); got != 7 {
 		t.Fatalf("expected separator key 7, got %d", got)
+	}
+}
+
+func TestExecuteInsertKeepsShortRowsInSingleLeafPastMaxFixedCells(t *testing.T) {
+	table, err := dbOpen(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	defer func() {
+		if err := dbClose(table); err != nil {
+			t.Fatalf("failed to close test database: %v", err)
+		}
+	}()
+
+	for i := uint32(1); i <= leafNodeMaxCells+1; i++ {
+		statement := &Statement{
+			Type:        StatementInsert,
+			RowToInsert: defaultRow(i, "u", "e"),
+		}
+		if got := executeInsert(statement, table); got != ExecuteSuccess {
+			t.Fatalf("expected execute result %d, got %d", ExecuteSuccess, got)
+		}
+	}
+
+	root := getPage(table.Pager, table.RootPageNum)
+	if got := getNodeType(root); got != NodeLeaf {
+		t.Fatalf("expected root node type %d, got %d", NodeLeaf, got)
+	}
+	if got := leafNodeNumCells(root); got != leafNodeMaxCells+1 {
+		t.Fatalf("expected leaf to hold %d short rows, got %d", leafNodeMaxCells+1, got)
 	}
 }
 

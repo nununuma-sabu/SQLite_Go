@@ -141,28 +141,98 @@ func setLeafNodeNextLeaf(node []byte, pageNum uint32) {
 	binary.LittleEndian.PutUint32(node[leafNodeNextLeafOffset:leafNodeNextLeafOffset+leafNodeNextLeafSize], pageNum)
 }
 
+func leafNodeContentStart(node []byte) uint32 {
+	return uint32(binary.LittleEndian.Uint16(node[leafNodeContentStartOffset : leafNodeContentStartOffset+leafNodeContentStartSize]))
+}
+
+func setLeafNodeContentStart(node []byte, offset uint32) {
+	binary.LittleEndian.PutUint16(node[leafNodeContentStartOffset:leafNodeContentStartOffset+leafNodeContentStartSize], uint16(offset))
+}
+
+func leafNodeCellPointer(node []byte, cellNum uint32) []byte {
+	start := leafNodeHeaderSize + cellNum*leafNodeCellPointerSize
+	return node[start : start+leafNodeCellPointerSize]
+}
+
+func leafNodeCellOffset(node []byte, cellNum uint32) uint32 {
+	return uint32(binary.LittleEndian.Uint16(leafNodeCellPointer(node, cellNum)))
+}
+
+func setLeafNodeCellOffset(node []byte, cellNum uint32, offset uint32) {
+	binary.LittleEndian.PutUint16(leafNodeCellPointer(node, cellNum), uint16(offset))
+}
+
 // leaf node内の指定セルを返す。
 func leafNodeCell(node []byte, cellNum uint32) []byte {
-	start := leafNodeHeaderSize + cellNum*leafNodeCellSize
-	return node[start : start+leafNodeCellSize]
+	start := leafNodeCellOffset(node, cellNum)
+	return node[start : start+leafNodeCellSizeAt(node, cellNum)]
+}
+
+func leafNodeCellSizeAt(node []byte, cellNum uint32) uint32 {
+	start := leafNodeCellOffset(node, cellNum)
+	payloadSize := binary.LittleEndian.Uint32(node[start+leafNodePayloadSizeOffset : start+leafNodeValueOffset])
+	return leafNodeValueOffset + payloadSize
 }
 
 // leaf node内の指定セルからキーを読み取る。
 func leafNodeKey(node []byte, cellNum uint32) uint32 {
-	cell := leafNodeCell(node, cellNum)
-	return binary.LittleEndian.Uint32(cell[leafNodeKeyOffset:leafNodeValueOffset])
+	start := leafNodeCellOffset(node, cellNum)
+	return binary.LittleEndian.Uint32(node[start+leafNodeKeyOffset : start+leafNodePayloadSizeOffset])
 }
 
 // leaf node内の指定セルへキーを書き込む。
 func setLeafNodeKey(node []byte, cellNum uint32, key uint32) {
-	cell := leafNodeCell(node, cellNum)
-	binary.LittleEndian.PutUint32(cell[leafNodeKeyOffset:leafNodeValueOffset], key)
+	start := leafNodeCellOffset(node, cellNum)
+	binary.LittleEndian.PutUint32(node[start+leafNodeKeyOffset:start+leafNodePayloadSizeOffset], key)
 }
 
 // leaf node内の指定セルから値領域を返す。
 func leafNodeValue(node []byte, cellNum uint32) []byte {
-	cell := leafNodeCell(node, cellNum)
-	return cell[leafNodeValueOffset : leafNodeValueOffset+leafNodeValueSize]
+	start := leafNodeCellOffset(node, cellNum)
+	payloadSize := binary.LittleEndian.Uint32(node[start+leafNodePayloadSizeOffset : start+leafNodeValueOffset])
+	return node[start+leafNodeValueOffset : start+leafNodeValueOffset+payloadSize]
+}
+
+func leafNodePointerArrayEnd(numCells uint32) uint32 {
+	return leafNodeHeaderSize + numCells*leafNodeCellPointerSize
+}
+
+func leafNodeFreeSpace(node []byte) uint32 {
+	return leafNodeContentStart(node) - leafNodePointerArrayEnd(leafNodeNumCells(node))
+}
+
+func leafNodeCanFit(node []byte, payloadSize uint32) bool {
+	return leafNodeFreeSpace(node) >= leafNodeCellPointerSize+leafNodeValueOffset+payloadSize
+}
+
+func leafNodeWriteCell(node []byte, cellNum uint32, key uint32, row Row, schema TableSchema) {
+	payload := make([]byte, serializedRowSize(row, schema))
+	serializeRow(row, schema, payload)
+	leafNodeWritePayloadCell(node, cellNum, key, payload)
+}
+
+func leafNodeWritePayloadCell(node []byte, cellNum uint32, key uint32, payload []byte) {
+	payloadSize := uint32(len(payload))
+	cellSize := leafNodeValueOffset + payloadSize
+	cellOffset := leafNodeContentStart(node) - cellSize
+
+	setLeafNodeContentStart(node, cellOffset)
+	setLeafNodeCellOffset(node, cellNum, cellOffset)
+	binary.LittleEndian.PutUint32(node[cellOffset+leafNodeKeyOffset:cellOffset+leafNodePayloadSizeOffset], key)
+	binary.LittleEndian.PutUint32(node[cellOffset+leafNodePayloadSizeOffset:cellOffset+leafNodeValueOffset], payloadSize)
+	copy(node[cellOffset+leafNodeValueOffset:cellOffset+leafNodeValueOffset+payloadSize], payload)
+}
+
+func leafNodeShiftCellPointersRight(node []byte, firstCell uint32, numCells uint32) {
+	for i := numCells; i > firstCell; i-- {
+		copy(leafNodeCellPointer(node, i), leafNodeCellPointer(node, i-1))
+	}
+}
+
+func clearLeafNodeCells(node []byte) {
+	setLeafNodeNumCells(node, 0)
+	setLeafNodeContentStart(node, pageSize)
+	clear(node[leafNodeHeaderSize:])
 }
 
 // 新しいleaf nodeを初期化する。
@@ -171,6 +241,7 @@ func initializeLeafNode(node []byte) {
 	setNodeRoot(node, false)
 	setLeafNodeNumCells(node, 0)
 	setLeafNodeNextLeaf(node, 0)
+	setLeafNodeContentStart(node, pageSize)
 }
 
 // 新しいinternal nodeを初期化する。

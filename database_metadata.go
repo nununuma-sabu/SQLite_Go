@@ -40,7 +40,7 @@ func readDatabaseMetadata(page []byte) (databaseMetadata, error) {
 	if !metadata.Schema.IsUsable() {
 		return databaseMetadata{}, fmt.Errorf("metadata schema is invalid")
 	}
-	if metadata.Schema.SerializedRowSize() > rowSize {
+	if metadata.Schema.SerializedRowSize() > leafNodeMaxPayloadSize {
 		return databaseMetadata{}, fmt.Errorf("metadata schema row is too large")
 	}
 
@@ -51,7 +51,7 @@ func writeDatabaseMetadata(page []byte, metadata databaseMetadata) error {
 	if !metadata.Schema.IsUsable() {
 		return fmt.Errorf("metadata schema is invalid")
 	}
-	if metadata.Schema.SerializedRowSize() > rowSize {
+	if metadata.Schema.SerializedRowSize() > leafNodeMaxPayloadSize {
 		return fmt.Errorf("metadata schema row is too large")
 	}
 
