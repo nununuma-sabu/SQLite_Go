@@ -173,6 +173,85 @@ func TestRunExecutesSelectStatement(t *testing.T) {
 	}
 }
 
+func TestRunExecutesSelectAllFromTable(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"insert 2 bob bob@example.com",
+		"SELECT * FROM users;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > (1, alice, alice@example.com)",
+		"(2, bob, bob@example.com)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesSelectColumnsFromTable(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"insert 2 bob bob@example.com",
+		"SELECT username, email FROM users;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > (alice, alice@example.com)",
+		"(bob, bob@example.com)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesSelectColumnsFromCustomTable(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table tbl1 (id integer primary key, column1 text, column2 real)",
+		"insert 1 Alice 165.2",
+		"SELECT column1, column2 FROM tbl1;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > (Alice, 165.2)",
+		"Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPrintsSyntaxErrorForInvalidSelectFrom(t *testing.T) {
+	got := runTempScript(t, []string{
+		"SELECT missing FROM users;",
+		"SELECT * FROM missing;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesStatementWithSurroundingSpaces(t *testing.T) {
 	got := runTempScript(t, []string{
 		" insert 1 alice alice@example.com ",

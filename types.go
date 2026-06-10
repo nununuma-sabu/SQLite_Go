@@ -4,10 +4,11 @@ import "os"
 
 // Statement はパース済みの命令を表す。
 type Statement struct {
-	Type        StatementType
-	RowToInsert Row
-	SelectByKey *uint32
-	Schema      TableSchema
+	Type          StatementType
+	RowToInsert   Row
+	SelectByKey   *uint32
+	SelectColumns []Column
+	Schema        TableSchema
 }
 
 // Row は1レコードを表す。

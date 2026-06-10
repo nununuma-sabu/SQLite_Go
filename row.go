@@ -18,8 +18,12 @@ var defaultRowLayout = DefaultTableSchema().RowLayout()
 
 // Rowを画面表示用の形式で出力する。
 func printRow(row Row, schema TableSchema, out io.Writer) {
-	values := make([]string, 0, len(schema.Columns))
-	for _, column := range schema.Columns {
+	printColumns(row, schema.Columns, out)
+}
+
+func printColumns(row Row, columns []Column, out io.Writer) {
+	values := make([]string, 0, len(columns))
+	for _, column := range columns {
 		values = append(values, formatRowValue(row, column))
 	}
 

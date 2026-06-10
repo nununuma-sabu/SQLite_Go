@@ -418,10 +418,20 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 		return prepareInsert(input, statement, schema)
 	}
 
-	if strings.HasPrefix(input, "select") {
+	if strings.HasPrefix(strings.ToLower(input), "select") {
 		statement.Type = StatementSelect
+		if strings.Contains(strings.ToLower(input), " from ") {
+			columns, result := parseSelectStatement(input, schema)
+			if result != PrepareSuccess {
+				return result
+			}
+			statement.SelectColumns = columns
+			return PrepareSuccess
+		}
+
 		fields := strings.Fields(input)
 		if len(fields) == 1 {
+			statement.SelectColumns = schema.Columns
 			return PrepareSuccess
 		}
 		if len(fields) != 2 {
@@ -439,10 +449,77 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 
 		selectByKey := uint32(key)
 		statement.SelectByKey = &selectByKey
+		statement.SelectColumns = schema.Columns
 		return PrepareSuccess
 	}
 
 	return PrepareUnrecognizedStatement
+}
+
+func parseSelectStatement(input string, schema TableSchema) ([]Column, PrepareResult) {
+	trimmed := strings.TrimSpace(input)
+	trimmed = strings.TrimSuffix(trimmed, ";")
+	trimmed = strings.TrimSpace(trimmed)
+
+	const selectPrefix = "select "
+	if !strings.HasPrefix(strings.ToLower(trimmed), selectPrefix) {
+		return nil, PrepareSyntaxError
+	}
+
+	body := strings.TrimSpace(trimmed[len(selectPrefix):])
+	fromIndex := findSelectFromIndex(body)
+	if fromIndex < 0 {
+		return nil, PrepareSyntaxError
+	}
+
+	columnList := strings.TrimSpace(body[:fromIndex])
+	tableName := strings.TrimSpace(body[fromIndex+len(" from "):])
+	if columnList == "" || tableName == "" || !strings.EqualFold(tableName, schema.Name) {
+		return nil, PrepareSyntaxError
+	}
+
+	if columnList == "*" {
+		return schema.Columns, PrepareSuccess
+	}
+
+	columnNames, ok := splitSQLList(columnList)
+	if !ok {
+		return nil, PrepareSyntaxError
+	}
+	columns := make([]Column, 0, len(columnNames))
+	for _, columnName := range columnNames {
+		columnName = strings.TrimSpace(columnName)
+		if columnName == "" || columnName == "*" {
+			return nil, PrepareSyntaxError
+		}
+		column, ok := schema.Column(columnName)
+		if !ok {
+			return nil, PrepareSyntaxError
+		}
+		columns = append(columns, column)
+	}
+
+	return columns, PrepareSuccess
+}
+
+func findSelectFromIndex(body string) int {
+	lower := strings.ToLower(body)
+	inString := false
+	for i := 0; i <= len(lower)-len(" from "); i++ {
+		if body[i] == '\'' {
+			if inString && i+1 < len(body) && body[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if !inString && strings.HasPrefix(lower[i:], " from ") {
+			return i
+		}
+	}
+
+	return -1
 }
 
 func parseColumnValue(field insertField, column Column) (Value, PrepareResult) {
@@ -566,18 +643,22 @@ func tableIsEmpty(table *Table) bool {
 
 // selectステートメントを実行し、保存済みの全行を出力する。
 func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteResult {
+	columns := statement.SelectColumns
+	if len(columns) == 0 {
+		columns = table.Schema.Columns
+	}
 	if statement.SelectByKey != nil {
 		cursor := tableFind(table, *statement.SelectByKey)
 		node := getPage(table.Pager, cursor.PageNum)
 		if cursor.CellNum < leafNodeNumCells(node) && leafNodeKey(node, cursor.CellNum) == *statement.SelectByKey {
-			printRow(deserializeRow(cursorValue(cursor), table.Schema), table.Schema, out)
+			printColumns(deserializeRow(cursorValue(cursor), table.Schema), columns, out)
 		}
 		return ExecuteSuccess
 	}
 
 	cursor := tableStart(table)
 	for !cursor.EndOfTable {
-		printRow(deserializeRow(cursorValue(cursor), table.Schema), table.Schema, out)
+		printColumns(deserializeRow(cursorValue(cursor), table.Schema), columns, out)
 		cursorAdvance(cursor)
 	}
 
