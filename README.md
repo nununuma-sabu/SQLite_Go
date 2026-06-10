@@ -62,8 +62,13 @@ Executed.
 db > insert 2 Bob 172.4 68.1
 Executed.
 db > select name, height from people;
-(Alice, 165.2)
-(Bob, 172.4)
++-------+--------+
+| name  | height |
++-------+--------+
+| Alice | 165.2  |
++-------+--------+
+| Bob   | 172.4  |
++-------+--------+
 Executed.
 db > .exit
 ```

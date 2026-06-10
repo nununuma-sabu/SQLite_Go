@@ -43,8 +43,13 @@ Executed.
 db > insert 2 Bob 172.4 68.1
 Executed.
 db > select
-(1, Alice, 165.2, 54.3)
-(2, Bob, 172.4, 68.1)
++----+-------+--------+--------+
+| id | name  | height | weight |
++----+-------+--------+--------+
+| 1  | Alice | 165.2  | 54.3   |
++----+-------+--------+--------+
+| 2  | Bob   | 172.4  | 68.1   |
++----+-------+--------+--------+
 Executed.
 db >
 ```
@@ -87,7 +92,7 @@ db >
 
 ## SELECT
 
-`select` は全レコードを主キー順に表示します。
+`select` は全レコードを主キー順に、カラム名のヘッダつきで表示します。
 
 ```text
 db > insert 1 alice alice@example.com
@@ -95,8 +100,13 @@ Executed.
 db > insert 2 bob bob@example.com
 Executed.
 db > select
-(1, alice, alice@example.com)
-(2, bob, bob@example.com)
++----+----------+-------------------+
+| id | username | email             |
++----+----------+-------------------+
+| 1  | alice    | alice@example.com |
++----+----------+-------------------+
+| 2  | bob      | bob@example.com   |
++----+----------+-------------------+
 Executed.
 db >
 ```
@@ -105,8 +115,13 @@ db >
 
 ```text
 db > select * from users;
-(1, alice, alice@example.com)
-(2, bob, bob@example.com)
++----+----------+-------------------+
+| id | username | email             |
++----+----------+-------------------+
+| 1  | alice    | alice@example.com |
++----+----------+-------------------+
+| 2  | bob      | bob@example.com   |
++----+----------+-------------------+
 Executed.
 db >
 ```
@@ -115,8 +130,13 @@ db >
 
 ```text
 db > select username, email from users;
-(alice, alice@example.com)
-(bob, bob@example.com)
++----------+-------------------+
+| username | email             |
++----------+-------------------+
+| alice    | alice@example.com |
++----------+-------------------+
+| bob      | bob@example.com   |
++----------+-------------------+
 Executed.
 db >
 ```
@@ -129,25 +149,52 @@ db >
 
 ```text
 db > select username, email from users where id = 2;
-(bob, bob@example.com)
++----------+-----------------+
+| username | email           |
++----------+-----------------+
+| bob      | bob@example.com |
++----------+-----------------+
 Executed.
 db > select username from users where id >= 2;
-(bob)
++----------+
+| username |
++----------+
+| bob      |
++----------+
 Executed.
 db > select username from users where id >= 2 and email is not null;
-(bob)
++----------+
+| username |
++----------+
+| bob      |
++----------+
 Executed.
 db > select username from users where id = 1 or id = 2;
-(alice)
-(bob)
++----------+
+| username |
++----------+
+| alice    |
++----------+
+| bob      |
++----------+
 Executed.
 db > select username from users where (id = 1 or id = 2) and email is not null;
-(alice)
-(bob)
++----------+
+| username |
++----------+
+| alice    |
++----------+
+| bob      |
++----------+
 Executed.
 db > select id from users where email is not null;
-(1)
-(2)
++----+
+| id |
++----+
+| 1  |
++----+
+| 2  |
++----+
 Executed.
 db >
 ```
@@ -157,12 +204,22 @@ db >
 
 ```text
 db > select username, email from users order by username desc;
-(bob, bob@example.com)
-(alice, alice@example.com)
++----------+-------------------+
+| username | email             |
++----------+-------------------+
+| bob      | bob@example.com   |
++----------+-------------------+
+| alice    | alice@example.com |
++----------+-------------------+
 Executed.
 db > select username from users where id >= 1 order by id asc;
-(alice)
-(bob)
++----------+
+| username |
++----------+
+| alice    |
++----------+
+| bob      |
++----------+
 Executed.
 db >
 ```
@@ -172,7 +229,11 @@ db >
 
 ```text
 db > select username from users order by id desc limit 1;
-(bob)
++----------+
+| username |
++----------+
+| bob      |
++----------+
 Executed.
 db >
 ```
@@ -181,7 +242,11 @@ db >
 
 ```text
 db > select 2
-(2, bob, bob@example.com)
++----+----------+-----------------+
+| id | username | email           |
++----+----------+-----------------+
+| 2  | bob      | bob@example.com |
++----+----------+-----------------+
 Executed.
 db >
 ```
@@ -224,7 +289,11 @@ $ go run . test.db
 db > .schema
 create table people (id integer, name text, height real, weight real)
 db > select
-(1, Alice, 165.2, 54.3)
++----+-------+--------+--------+
+| id | name  | height | weight |
++----+-------+--------+--------+
+| 1  | Alice | 165.2  | 54.3   |
++----+-------+--------+--------+
 Executed.
 db > .exit
 ```

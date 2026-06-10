@@ -22,12 +22,59 @@ func printRow(row Row, schema TableSchema, out io.Writer) {
 }
 
 func printColumns(row Row, columns []Column, out io.Writer) {
-	values := make([]string, 0, len(columns))
-	for _, column := range columns {
-		values = append(values, formatRowValue(row, column))
+	printRows([]Row{row}, columns, out)
+}
+
+func printRows(rows []Row, columns []Column, out io.Writer) {
+	widths := make([]int, len(columns))
+	for i, column := range columns {
+		widths[i] = len(column.Name)
+	}
+	for _, row := range rows {
+		for i, column := range columns {
+			if width := len(formatRowValue(row, column)); width > widths[i] {
+				widths[i] = width
+			}
+		}
 	}
 
-	fmt.Fprintf(out, "(%s)\n", strings.Join(values, ", "))
+	printTableSeparator(widths, out)
+	printTableValues(columnNames(columns), widths, out)
+	printTableSeparator(widths, out)
+	for _, row := range rows {
+		values := make([]string, 0, len(columns))
+		for _, column := range columns {
+			values = append(values, formatRowValue(row, column))
+		}
+		printTableValues(values, widths, out)
+		printTableSeparator(widths, out)
+	}
+}
+
+func columnNames(columns []Column) []string {
+	names := make([]string, 0, len(columns))
+	for _, column := range columns {
+		names = append(names, column.Name)
+	}
+
+	return names
+}
+
+func printTableValues(values []string, widths []int, out io.Writer) {
+	fmt.Fprint(out, "|")
+	for i, value := range values {
+		fmt.Fprintf(out, " %-*s |", widths[i], value)
+	}
+	fmt.Fprintln(out)
+}
+
+func printTableSeparator(widths []int, out io.Writer) {
+	fmt.Fprint(out, "+")
+	for _, width := range widths {
+		fmt.Fprint(out, strings.Repeat("-", width+2))
+		fmt.Fprint(out, "+")
+	}
+	fmt.Fprintln(out)
 }
 
 // 固定長領域へ文字列を書き込む。余った領域はゼロ値のまま残る。

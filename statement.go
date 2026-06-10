@@ -1145,40 +1145,14 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	if len(columns) == 0 {
 		columns = table.Schema.Columns
 	}
+	rows := selectRows(statement, table)
 	if statement.SelectOrderBy != nil {
-		rows := selectRows(statement, table)
 		sortRows(rows, *statement.SelectOrderBy)
-		rows = limitRows(rows, statement.SelectLimit)
-		for _, row := range rows {
-			printColumns(row, columns, out)
-		}
-		return ExecuteSuccess
 	}
+	rows = limitRows(rows, statement.SelectLimit)
 
-	if statement.SelectByKey != nil {
-		cursor := tableFind(table, *statement.SelectByKey)
-		node := getPage(table.Pager, cursor.PageNum)
-		if cursor.CellNum < leafNodeNumCells(node) && leafNodeKey(node, cursor.CellNum) == *statement.SelectByKey {
-			row := deserializeRow(cursorValue(cursor), table.Schema)
-			if rowMatchesWhere(row, statement.SelectWhere) {
-				printColumns(row, columns, out)
-			}
-		}
-		return ExecuteSuccess
-	}
-
-	cursor := tableStart(table)
-	printed := uint32(0)
-	for !cursor.EndOfTable {
-		row := deserializeRow(cursorValue(cursor), table.Schema)
-		if rowMatchesWhere(row, statement.SelectWhere) {
-			if reachedLimit(printed, statement.SelectLimit) {
-				break
-			}
-			printColumns(row, columns, out)
-			printed++
-		}
-		cursorAdvance(cursor)
+	if len(rows) > 0 {
+		printRows(rows, columns, out)
 	}
 
 	return ExecuteSuccess
@@ -1196,10 +1170,6 @@ func limitRows(rows []Row, limit *uint32) []Row {
 	}
 
 	return rows[:*limit]
-}
-
-func reachedLimit(count uint32, limit *uint32) bool {
-	return limit != nil && count >= *limit
 }
 
 func selectRows(statement *Statement, table *Table) []Row {

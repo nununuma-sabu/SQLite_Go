@@ -56,6 +56,48 @@ func runTempSQLScript(t *testing.T, script string) string {
 	return out.String()
 }
 
+func expectedTableLines(prefix string, columns []string, rows ...[]string) []string {
+	widths := make([]int, len(columns))
+	for i, column := range columns {
+		widths[i] = len(column)
+	}
+	for _, row := range rows {
+		for i, value := range row {
+			if len(value) > widths[i] {
+				widths[i] = len(value)
+			}
+		}
+	}
+
+	lines := []string{prefix + expectedTableSeparator(widths)}
+	lines = append(lines, expectedTableValues(columns, widths))
+	lines = append(lines, expectedTableSeparator(widths))
+	for _, row := range rows {
+		lines = append(lines, expectedTableValues(row, widths))
+		lines = append(lines, expectedTableSeparator(widths))
+	}
+
+	return lines
+}
+
+func expectedTableSeparator(widths []int) string {
+	parts := make([]string, 0, len(widths))
+	for _, width := range widths {
+		parts = append(parts, strings.Repeat("-", width+2))
+	}
+
+	return "+" + strings.Join(parts, "+") + "+"
+}
+
+func expectedTableValues(values []string, widths []int) string {
+	parts := make([]string, 0, len(values))
+	for i, value := range values {
+		parts = append(parts, fmt.Sprintf(" %-*s ", widths[i], value))
+	}
+
+	return "|" + strings.Join(parts, "|") + "|"
+}
+
 func defaultRow(id uint32, username string, email string) Row {
 	return Row{
 		Values: map[string]Value{
@@ -136,14 +178,14 @@ insert 2 Bob null;
 SELECT name, note FROM people;
 `)
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"Executed.",
 		"Executed.",
 		"Executed.",
-		"(Alice; A, keeps -- text)",
-		"(Bob, NULL)",
-		"Executed.",
-	}, "\n") + "\n"
+	}
+	wantLines = append(wantLines, expectedTableLines("", []string{"name", "note"}, []string{"Alice; A", "keeps -- text"}, []string{"Bob", "NULL"})...)
+	wantLines = append(wantLines, "Executed.")
+	want := strings.Join(wantLines, "\n") + "\n"
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -166,14 +208,13 @@ func TestRunExecutesInsertStatementWithQuotedText(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
-		"db > (1, Alice Smith, alice smith@example.com)",
-		"(2, Bob's note, bob@example.com)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username", "email"}, []string{"1", "Alice Smith", "alice smith@example.com"}, []string{"2", "Bob's note", "bob@example.com"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -212,14 +253,13 @@ func TestRunExecutesSelectStatement(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
-		"db > (1, alice, alice@example.com)",
-		"(2, bob, bob@example.com)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username", "email"}, []string{"1", "alice", "alice@example.com"}, []string{"2", "bob", "bob@example.com"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -233,14 +273,13 @@ func TestRunExecutesSelectAllFromTable(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
-		"db > (1, alice, alice@example.com)",
-		"(2, bob, bob@example.com)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username", "email"}, []string{"1", "alice", "alice@example.com"}, []string{"2", "bob", "bob@example.com"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -254,14 +293,13 @@ func TestRunExecutesSelectColumnsFromTable(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
-		"db > (alice, alice@example.com)",
-		"(bob, bob@example.com)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"username", "email"}, []string{"alice", "alice@example.com"}, []string{"bob", "bob@example.com"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -276,14 +314,14 @@ func TestRunExecutesSelectWhereByPrimaryKey(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (2, bob, bob@example.com)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username", "email"}, []string{"2", "bob", "bob@example.com"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -297,13 +335,13 @@ func TestRunExecutesSelectWhereByTextColumn(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
-		"db > (2, alice.smith@example.com)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "email"}, []string{"2", "alice.smith@example.com"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -319,16 +357,16 @@ func TestRunExecutesSelectWhereIsNull(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (1)",
-		"Executed.",
-		"db > (2)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id"}, []string{"1"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id"}, []string{"2"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -347,25 +385,21 @@ func TestRunExecutesSelectWhereComparisonOperators(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (Alice)",
-		"(Bob)",
-		"Executed.",
-		"db > (Alice)",
-		"(Carol)",
-		"Executed.",
-		"db > (2)",
-		"(3)",
-		"Executed.",
-		"db > (2)",
-		"(3)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Alice"}, []string{"Bob"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Alice"}, []string{"Carol"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id"}, []string{"2"}, []string{"3"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id"}, []string{"2"}, []string{"3"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -382,18 +416,17 @@ func TestRunExecutesSelectWhereAndConditions(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (Alice)",
-		"(Bob)",
-		"Executed.",
-		"db > (1)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Alice"}, []string{"Bob"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id"}, []string{"1"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -411,21 +444,19 @@ func TestRunExecutesSelectWhereOrConditions(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (Alice)",
-		"(Carol)",
-		"Executed.",
-		"db > (Alice)",
-		"Executed.",
-		"db > (2)",
-		"(3)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Alice"}, []string{"Carol"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Alice"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id"}, []string{"2"}, []string{"3"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -443,20 +474,19 @@ func TestRunExecutesSelectWhereParenthesizedConditions(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (Alice)",
-		"Executed.",
-		"db > (Alice)",
-		"Executed.",
-		"db > (Alice)",
-		"(Carol)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Alice"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Alice"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Alice"}, []string{"Carol"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -474,25 +504,19 @@ func TestRunExecutesSelectOrderByAscAndDesc(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (Carol, 158.9)",
-		"(Alice, 165.2)",
-		"(Bob, 172.4)",
-		"Executed.",
-		"db > (Carol)",
-		"(Bob)",
-		"(Alice)",
-		"Executed.",
-		"db > (1, NULL)",
-		"(3, NULL)",
-		"(2, Bobby)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name", "height"}, []string{"Carol", "158.9"}, []string{"Alice", "165.2"}, []string{"Bob", "172.4"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Carol"}, []string{"Bob"}, []string{"Alice"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "nickname"}, []string{"1", "NULL"}, []string{"3", "NULL"}, []string{"2", "Bobby"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -508,16 +532,15 @@ func TestRunExecutesSelectWhereOrderBy(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (Alice)",
-		"(Carol)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Alice"}, []string{"Carol"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -534,18 +557,16 @@ func TestRunExecutesSelectLimit(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (alice)",
-		"(bob)",
-		"Executed.",
-		"db > (bob)",
-		"Executed.",
-		"db > Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"username"}, []string{"alice"}, []string{"bob"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"username"}, []string{"bob"})...)
+	wantLines = append(wantLines, "Executed.", "db > Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -562,18 +583,17 @@ func TestRunExecutesSelectOrderByLimit(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (Bob)",
-		"(Alice)",
-		"Executed.",
-		"db > (Carol)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Bob"}, []string{"Alice"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Carol"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -587,13 +607,13 @@ func TestRunExecutesSelectColumnsFromCustomTable(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
-		"db > (Alice, 165.2)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"column1", "column2"}, []string{"Alice", "165.2"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -643,12 +663,12 @@ func TestRunExecutesStatementWithSurroundingSpaces(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
-		"db > (1, alice, alice@example.com)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username", "email"}, []string{"1", "alice", "alice@example.com"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -663,14 +683,14 @@ func TestRunExecutesSelectByIDStatement(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (2, bob, bob@example.com)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username", "email"}, []string{"2", "bob", "bob@example.com"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -722,25 +742,24 @@ func TestRunPrintsAllRowsInMultiLevelTree(t *testing.T) {
 	got := runScript(t, filepath.Join(t.TempDir(), "test.db"), commands)
 	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
 
-	want := []string{
-		"db > (1, user1, person1@example.com)",
-		"(2, user2, person2@example.com)",
-		"(3, user3, person3@example.com)",
-		"(4, user4, person4@example.com)",
-		"(5, user5, person5@example.com)",
-		"(6, user6, person6@example.com)",
-		"(7, user7, person7@example.com)",
-		"(8, user8, person8@example.com)",
-		"(9, user9, person9@example.com)",
-		"(10, user10, person10@example.com)",
-		"(11, user11, person11@example.com)",
-		"(12, user12, person12@example.com)",
-		"(13, user13, person13@example.com)",
-		"(14, user14, person14@example.com)",
-		"(15, user15, person15@example.com)",
-		"Executed.",
-		"db > ",
-	}
+	want := expectedTableLines("db > ", []string{"id", "username", "email"},
+		[]string{"1", "user1", "person1@example.com"},
+		[]string{"2", "user2", "person2@example.com"},
+		[]string{"3", "user3", "person3@example.com"},
+		[]string{"4", "user4", "person4@example.com"},
+		[]string{"5", "user5", "person5@example.com"},
+		[]string{"6", "user6", "person6@example.com"},
+		[]string{"7", "user7", "person7@example.com"},
+		[]string{"8", "user8", "person8@example.com"},
+		[]string{"9", "user9", "person9@example.com"},
+		[]string{"10", "user10", "person10@example.com"},
+		[]string{"11", "user11", "person11@example.com"},
+		[]string{"12", "user12", "person12@example.com"},
+		[]string{"13", "user13", "person13@example.com"},
+		[]string{"14", "user14", "person14@example.com"},
+		[]string{"15", "user15", "person15@example.com"},
+	)
+	want = append(want, "Executed.", "db > ")
 
 	start := len(lines) - len(want)
 	if start < 0 {
@@ -772,12 +791,12 @@ func TestRunAllowsMaxLengthStrings(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
-		"db > (1, " + longUsername + ", " + longEmail + ")",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username", "email"}, []string{"1", longUsername, longEmail})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -831,15 +850,14 @@ func TestRunCreatesTableAndUsesCustomSchema(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (1, Alice, 165.2, 54.3)",
-		"(2, Bob, 172.4, 68.1)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name", "height", "weight"}, []string{"1", "Alice", "165.2", "54.3"}, []string{"2", "Bob", "172.4", "68.1"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -891,17 +909,16 @@ func TestRunUsesNamedPrimaryKeyColumnAsBTreeKey(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (10, 1, Alice)",
-		"(10, 2, Bob)",
-		"Executed.",
-		"db > (10, 2, Bob)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "account_id", "name"}, []string{"10", "1", "Alice"}, []string{"10", "2", "Bob"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "account_id", "name"}, []string{"10", "2", "Bob"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -916,14 +933,14 @@ func TestRunRejectsDuplicateUniqueColumnValue(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Error: Constraint violation.",
-		"db > (1, 100, Alice)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "code", "name"}, []string{"1", "100", "Alice"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -938,15 +955,14 @@ func TestRunStoresNullValues(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (1, NULL, NULL)",
-		"(2, NULL, NULL)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "nickname", "code"}, []string{"1", "NULL", "NULL"}, []string{"2", "NULL", "NULL"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -977,13 +993,13 @@ func TestRunTreatsQuotedNullAsText(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
-		"db > (1, null)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name"}, []string{"1", "null"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -998,14 +1014,14 @@ func TestRunSelectsByIDWithCustomSchema(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (2, Bob, 172.4, 68.1)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name", "height", "weight"}, []string{"2", "Bob", "172.4", "68.1"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -1034,12 +1050,9 @@ func TestRunKeepsCustomSchemaAfterClosingConnection(t *testing.T) {
 		"select",
 		".exit",
 	})
-	want = strings.Join([]string{
-		"db > (1, Alice, 165.2, 54.3)",
-		"(2, Bob, 172.4, 68.1)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	wantLines := expectedTableLines("db > ", []string{"id", "name", "height", "weight"}, []string{"1", "Alice", "165.2", "54.3"}, []string{"2", "Bob", "172.4", "68.1"})
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want = strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -1094,16 +1107,16 @@ func TestRunReplacesTableWithCreateOrReplace(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
 		"db > create table people (id integer primary key, name text, height real)",
 		"db > Executed.",
 		"db > Executed.",
-		"db > (2, Bob, 172.4)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name", "height"}, []string{"2", "Bob", "172.4"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -1125,12 +1138,12 @@ func TestRunPersistsCreateOrReplaceTable(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > create table people (id integer primary key, name text)",
-		"db > (2, Bob)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name"}, []string{"2", "Bob"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -1144,13 +1157,13 @@ func TestRunAllowsRowsLargerThanDefaultRowSizeWhenTheyFitLeafPage(t *testing.T) 
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Executed.",
-		"db > (1, Alice, Smith)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "first_name", "last_name"}, []string{"1", "Alice", "Smith"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -1298,11 +1311,9 @@ func TestRunKeepsDataAfterClosingConnection(t *testing.T) {
 		"select",
 		".exit",
 	})
-	want = strings.Join([]string{
-		"db > (1, user1, person1@example.com)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	wantLines := expectedTableLines("db > ", []string{"id", "username", "email"}, []string{"1", "user1", "person1@example.com"})
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want = strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
@@ -1471,13 +1482,13 @@ func TestRunPrintsErrorForDuplicateID(t *testing.T) {
 		".exit",
 	})
 
-	want := strings.Join([]string{
+	wantLines := []string{
 		"db > Executed.",
 		"db > Error: Duplicate key.",
-		"db > (1, user1, person1@example.com)",
-		"Executed.",
-		"db > ",
-	}, "\n")
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username", "email"}, []string{"1", "user1", "person1@example.com"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
 	}
