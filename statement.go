@@ -442,6 +442,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 			}
 			statement.SelectColumns = selectClause.Columns
 			statement.SelectItems = selectClause.Items
+			statement.SelectDistinct = selectClause.Distinct
 			statement.SelectFromDual = selectClause.FromDual
 			statement.SelectJoin = selectClause.Join
 			statement.SelectWhere = selectClause.Where
@@ -482,6 +483,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 type selectClause struct {
 	Columns  []Column
 	Items    []SelectItem
+	Distinct bool
 	FromDual bool
 	Join     *JoinClause
 	Where    WhereExpression
@@ -594,6 +596,11 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	}
 
 	columnList := strings.TrimSpace(body[:fromIndex])
+	distinct := false
+	if strings.HasPrefix(strings.ToLower(columnList), "distinct ") {
+		distinct = true
+		columnList = strings.TrimSpace(columnList[len("distinct "):])
+	}
 	tableWhereOrderAndLimit := strings.TrimSpace(body[fromIndex+len(" from "):])
 	limitIndex := findSelectLimitIndex(tableWhereOrderAndLimit)
 	tableWhereAndOrder := tableWhereOrderAndLimit
@@ -697,7 +704,7 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		if fromSource.Join != nil || len(groupBy) > 0 || having.Kind != WhereExpressionNone {
 			return selectClause{}, PrepareSyntaxError
 		}
-		return selectClause{Columns: sourceSchema.Columns, Items: selectItemsFromColumns(sourceSchema.Columns), FromDual: fromDual, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+		return selectClause{Columns: sourceSchema.Columns, Items: selectItemsFromColumns(sourceSchema.Columns), Distinct: distinct, FromDual: fromDual, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 	}
 
 	itemInputs, ok := splitSQLList(columnList)
@@ -742,7 +749,7 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		}
 	}
 
-	return selectClause{Columns: columns, Items: items, FromDual: fromDual, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+	return selectClause{Columns: columns, Items: items, Distinct: distinct, FromDual: fromDual, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 }
 
 type fromSource struct {
@@ -2424,16 +2431,23 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	}
 	if len(statement.SelectGroupBy) > 0 || selectItemsContainAggregate(items) {
 		valueRows := aggregateSelectRows(rows, items, statement.SelectGroupBy, statement.SelectHaving)
+		if statement.SelectDistinct {
+			valueRows = distinctValueRows(valueRows)
+		}
 		valueRows = limitValueRows(valueRows, statement.SelectLimit)
 		if len(valueRows) > 0 {
 			printValueRows(selectItemHeaders(items), valueRows, out)
 		}
 		return ExecuteSuccess
 	}
-	rows = limitRows(rows, statement.SelectLimit)
+	valueRows := selectValueRows(rows, items)
+	if statement.SelectDistinct {
+		valueRows = distinctValueRows(valueRows)
+	}
+	valueRows = limitValueRows(valueRows, statement.SelectLimit)
 
-	if len(rows) > 0 {
-		printSelectRows(rows, items, out)
+	if len(valueRows) > 0 {
+		printValueRows(selectItemHeaders(items), valueRows, out)
 	}
 
 	return ExecuteSuccess
@@ -2456,6 +2470,47 @@ func selectItemHeaders(items []SelectItem) []string {
 	}
 
 	return headers
+}
+
+func selectValueRows(rows []Row, items []SelectItem) [][]Value {
+	valueRows := make([][]Value, 0, len(rows))
+	for _, row := range rows {
+		values := make([]Value, 0, len(items))
+		for _, item := range items {
+			value, ok := evaluateValueExpression(row, item.Expression)
+			if !ok {
+				value = Value{StorageClass: StorageNull}
+			}
+			values = append(values, value)
+		}
+		valueRows = append(valueRows, values)
+	}
+
+	return valueRows
+}
+
+func distinctValueRows(rows [][]Value) [][]Value {
+	distinctRows := make([][]Value, 0, len(rows))
+	seen := map[string]struct{}{}
+	for _, row := range rows {
+		key := valueRowKey(row)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		distinctRows = append(distinctRows, row)
+	}
+
+	return distinctRows
+}
+
+func valueRowKey(row []Value) string {
+	parts := make([]string, 0, len(row))
+	for _, value := range row {
+		parts = append(parts, valueKey(value))
+	}
+
+	return strings.Join(parts, "\x00")
 }
 
 func aggregateSelectRows(rows []Row, items []SelectItem, groupBy []Column, having HavingExpression) [][]Value {
@@ -2610,28 +2665,6 @@ func limitValueRows(rows [][]Value, limit *uint32) [][]Value {
 	}
 
 	return rows[:*limit]
-}
-
-func printSelectRows(rows []Row, items []SelectItem, out io.Writer) {
-	headers := make([]string, 0, len(items))
-	for _, item := range items {
-		headers = append(headers, item.Header)
-	}
-
-	valueRows := make([][]Value, 0, len(rows))
-	for _, row := range rows {
-		values := make([]Value, 0, len(items))
-		for _, item := range items {
-			value, ok := evaluateValueExpression(row, item.Expression)
-			if !ok {
-				value = Value{StorageClass: StorageNull}
-			}
-			values = append(values, value)
-		}
-		valueRows = append(valueRows, values)
-	}
-
-	printValueRows(headers, valueRows, out)
 }
 
 func evaluateValueExpression(row Row, expression ValueExpression) (Value, bool) {
@@ -2851,20 +2884,6 @@ func numericValueAsReal(value Value) float64 {
 	}
 
 	return float64(value.Integer)
-}
-
-func limitRows(rows []Row, limit *uint32) []Row {
-	if limit == nil {
-		return rows
-	}
-	if *limit == 0 {
-		return nil
-	}
-	if uint32(len(rows)) <= *limit {
-		return rows
-	}
-
-	return rows[:*limit]
 }
 
 func selectRows(statement *Statement, table *Table) []Row {

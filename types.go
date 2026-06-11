@@ -10,6 +10,7 @@ type Statement struct {
 	SelectByKey    *uint32
 	SelectColumns  []Column
 	SelectItems    []SelectItem
+	SelectDistinct bool
 	SelectFromDual bool
 	SelectJoin     *JoinClause
 	SelectWhere    WhereExpression

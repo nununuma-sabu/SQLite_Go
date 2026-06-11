@@ -160,6 +160,21 @@ Executed.
 db >
 ```
 
+`select distinct ...` は重複する結果行を除外します。
+
+```text
+db > select distinct username from users;
++----------+
+| username |
++----------+
+| alice    |
++----------+
+| bob      |
++----------+
+Executed.
+db >
+```
+
 表には `FROM people p` または `FROM people AS p` の形式で別名を付けられます。
 カラム参照には `p.name` のような修飾名を使えます。
 SELECT句のカラムや式には `AS` つき、または空白区切りで表示名を付けられます。

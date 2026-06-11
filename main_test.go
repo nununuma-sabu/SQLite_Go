@@ -626,6 +626,68 @@ func TestRunExecutesSelectArithmeticExpressions(t *testing.T) {
 	}
 }
 
+func TestRunExecutesSelectDistinct(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real)",
+		"insert 1 Alice 152.5",
+		"insert 2 Bob 181",
+		"insert 3 Alice 152.5",
+		"SELECT DISTINCT name, height FROM people ORDER BY id ASC;",
+		"SELECT DISTINCT name FROM people ORDER BY id ASC LIMIT 1;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"name", "height"},
+		[]string{"Alice", "152.5"},
+		[]string{"Bob", "181"},
+	)...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"name"},
+		[]string{"Alice"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesSelectDistinctFromJoin(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real)",
+		"insert 1 Alice 152.5",
+		"insert 2 Bob 181",
+		"insert 3 Carol 158.9",
+		"SELECT DISTINCT b.name AS taller FROM people a JOIN people b ON a.height < b.height ORDER BY b.id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"taller"},
+		[]string{"Bob"},
+		[]string{"Carol"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesSelectArithmeticWithNullAndDivisionByZero(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table scores (id integer primary key, points integer, bonus real)",
@@ -850,6 +912,34 @@ func TestRunExecutesHavingIsNull(t *testing.T) {
 	wantLines = append(wantLines, expectedTableLines("db > ",
 		[]string{"region", "avg(score)"},
 		[]string{"West", "NULL"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesDistinctAfterGroupBy(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table sales (id integer primary key, region text, amount integer)",
+		"insert 1 East 10",
+		"insert 2 West 10",
+		"insert 3 North 20",
+		"SELECT DISTINCT sum(amount) AS total FROM sales GROUP BY region;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"total"},
+		[]string{"10"},
+		[]string{"20"},
 	)...)
 	wantLines = append(wantLines, "Executed.", "db > ")
 	want := strings.Join(wantLines, "\n")
