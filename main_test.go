@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -616,6 +617,46 @@ func TestRunExecutesSelectColumnsFromCustomTable(t *testing.T) {
 	want := strings.Join(wantLines, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunStoresBlobFromFile(t *testing.T) {
+	dir := t.TempDir()
+	blobPath := filepath.Join(dir, "sample.bin")
+	blob := bytes.Repeat([]byte{0xab}, int(leafNodeMaxPayloadSize)+100)
+	if err := os.WriteFile(blobPath, blob, 0o600); err != nil {
+		t.Fatalf("failed to write blob fixture: %v", err)
+	}
+
+	dbPath := filepath.Join(dir, "test.db")
+	got := runScript(t, dbPath, []string{
+		"create table files (id integer primary key, name text, data blob)",
+		fmt.Sprintf("insert 1 sample @%s", blobPath),
+		fmt.Sprintf("select id, name, data from files where data = @%s", blobPath),
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name", "data"}, []string{"1", "sample", fmt.Sprintf("BLOB(%d bytes)", len(blob))})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+
+	got = runScript(t, dbPath, []string{
+		"select name, data from files",
+		".exit",
+	})
+
+	wantLines = expectedTableLines("db > ", []string{"name", "data"}, []string{"sample", fmt.Sprintf("BLOB(%d bytes)", len(blob))})
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want = strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected persisted output %q, got %q", want, got)
 	}
 }
 
@@ -1674,6 +1715,32 @@ func TestSerializeAndDeserializeRow(t *testing.T) {
 	got := deserializeRow(storage, DefaultTableSchema())
 
 	for _, column := range DefaultTableSchema().Columns {
+		if !valuesEqual(rowValue(got, column), rowValue(row, column)) {
+			t.Fatalf("expected row %#v, got %#v", row, got)
+		}
+	}
+}
+
+func TestSerializeAndDeserializeBlobRow(t *testing.T) {
+	schema := TableSchema{
+		Name: "files",
+		Columns: []Column{
+			{Name: "id", DeclaredType: "INTEGER", Affinity: AffinityInteger, PrimaryKey: true},
+			{Name: "data", DeclaredType: "BLOB", Affinity: AffinityBlob},
+		},
+	}
+	row := Row{
+		Values: map[string]Value{
+			"id":   {StorageClass: StorageInteger, Integer: 1},
+			"data": {StorageClass: StorageBlob, Blob: []byte{0x00, 0x01, 0xfe, 0xff}},
+		},
+	}
+	storage := make([]byte, serializedRowSize(row, schema))
+
+	serializeRow(row, schema, storage)
+	got := deserializeRow(storage, schema)
+
+	for _, column := range schema.Columns {
 		if !valuesEqual(rowValue(got, column), rowValue(row, column)) {
 			t.Fatalf("expected row %#v, got %#v", row, got)
 		}

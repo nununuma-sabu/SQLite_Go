@@ -45,12 +45,20 @@ const (
 	leafNodeContentStartOffset = leafNodeNextLeafOffset + leafNodeNextLeafSize
 	leafNodeHeaderSize         = commonNodeHeaderSize + leafNodeNumCellsSize + leafNodeNextLeafSize + leafNodeContentStartSize
 
-	leafNodeKeySize           = 4
-	leafNodeKeyOffset         = 0
-	leafNodePayloadSizeSize   = 4
-	leafNodePayloadSizeOffset = leafNodeKeyOffset + leafNodeKeySize
-	leafNodeValueOffset       = leafNodePayloadSizeOffset + leafNodePayloadSizeSize
-	leafNodeCellPointerSize   = 2
+	leafNodeKeySize                    = 4
+	leafNodeKeyOffset                  = 0
+	leafNodePayloadSizeSize            = 4
+	leafNodePayloadSizeOffset          = leafNodeKeyOffset + leafNodeKeySize
+	leafNodeValueOffset                = leafNodePayloadSizeOffset + leafNodePayloadSizeSize
+	leafNodeCellPointerSize            = 2
+	leafNodeOverflowPayloadFlag uint32 = 1 << 31
+
+	overflowPageNextPageOffset    = 0
+	overflowPageNextPageSize      = 4
+	overflowPagePayloadSizeOffset = overflowPageNextPageOffset + overflowPageNextPageSize
+	overflowPagePayloadSizeSize   = 4
+	overflowPageHeaderSize        = overflowPagePayloadSizeOffset + overflowPagePayloadSizeSize
+	overflowPagePayloadCapacity   = pageSize - overflowPageHeaderSize
 
 	internalNodeNumKeysSize      = 4
 	internalNodeNumKeysOffset    = commonNodeHeaderSize

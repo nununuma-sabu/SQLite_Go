@@ -104,6 +104,8 @@ func serializedRowSize(row Row, schema TableSchema) uint32 {
 			size += 8
 		case StorageText:
 			size += 1 + uint32(len(value.Text))
+		case StorageBlob:
+			size += 4 + uint32(len(value.Blob))
 		}
 	}
 
@@ -137,6 +139,11 @@ func serializeRow(source Row, schema TableSchema, destination []byte) {
 			offset++
 			copy(destination[offset:offset+len(value.Text)], value.Text)
 			offset += len(value.Text)
+		case StorageBlob:
+			binary.LittleEndian.PutUint32(destination[offset:offset+4], uint32(len(value.Blob)))
+			offset += 4
+			copy(destination[offset:offset+len(value.Blob)], value.Blob)
+			offset += len(value.Blob)
 		}
 	}
 }
@@ -176,6 +183,11 @@ func deserializeRecordRow(source []byte, schema TableSchema) Row {
 			length := int(source[offset])
 			offset++
 			value.Text = string(source[offset : offset+length])
+			offset += length
+		case StorageBlob:
+			length := int(binary.LittleEndian.Uint32(source[offset : offset+4]))
+			offset += 4
+			value.Blob = append([]byte(nil), source[offset:offset+length]...)
 			offset += length
 		}
 
@@ -293,6 +305,8 @@ func formatRowValue(row Row, column Column) string {
 		return strconv.FormatFloat(value.Real, 'f', -1, 64)
 	case AffinityText:
 		return value.Text
+	case AffinityBlob:
+		return fmt.Sprintf("BLOB(%d bytes)", len(value.Blob))
 	default:
 		return "NULL"
 	}

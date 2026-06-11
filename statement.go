@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"io"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -987,6 +989,18 @@ func parseColumnValue(field insertField, column Column) (Value, PrepareResult) {
 			return Value{}, PrepareStringTooLong
 		}
 		return Value{StorageClass: StorageText, Text: field.Value}, PrepareSuccess
+	case AffinityBlob:
+		if field.Quoted || !strings.HasPrefix(field.Value, "@") || len(field.Value) == 1 {
+			return Value{}, PrepareSyntaxError
+		}
+		blob, err := os.ReadFile(field.Value[1:])
+		if err != nil {
+			return Value{}, PrepareSyntaxError
+		}
+		if !column.ValidateBlobValue(blob) {
+			return Value{}, PrepareStringTooLong
+		}
+		return Value{StorageClass: StorageBlob, Blob: blob}, PrepareSuccess
 	default:
 		return Value{}, PrepareSyntaxError
 	}
@@ -1051,6 +1065,8 @@ func valuesEqual(left Value, right Value) bool {
 		return left.Real == right.Real
 	case StorageText:
 		return left.Text == right.Text
+	case StorageBlob:
+		return bytes.Equal(left.Blob, right.Blob)
 	case StorageNull:
 		return true
 	default:

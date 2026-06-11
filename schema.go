@@ -172,7 +172,7 @@ func (schema TableSchema) IsUsable() bool {
 			return false
 		}
 		seenColumns[normalizedName] = struct{}{}
-		if column.StorageSize() == 0 {
+		if column.Affinity != AffinityBlob && column.StorageSize() == 0 {
 			return false
 		}
 		if column.PrimaryKey {
@@ -258,7 +258,25 @@ func (column Column) StorageSize() uint32 {
 }
 
 func (column Column) SerializedSize() uint32 {
+	if column.Affinity == AffinityBlob {
+		if column.MaxLength > 0 {
+			return 1 + 4 + column.MaxLength
+		}
+		return 1 + 4
+	}
+
 	return 1 + column.StorageSize()
+}
+
+func (column Column) ValidateBlobValue(value []byte) bool {
+	if column.Affinity != AffinityBlob {
+		return false
+	}
+	if column.MaxLength == 0 {
+		return true
+	}
+
+	return uint32(len(value)) <= column.MaxLength
 }
 
 func (column Column) ValidateIntegerValue(value int64) bool {

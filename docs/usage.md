@@ -34,6 +34,7 @@ select name, height from people;
 - `INTEGER`
 - `TEXT`
 - `REAL`
+- `BLOB`
 
 ```text
 db > create table people (id integer, name text, height real, weight real)
@@ -89,6 +90,24 @@ db >
 - デフォルトスキーマの `username` は32文字以内
 - デフォルトスキーマの `email` は255文字以内
 - 同じ主キーは重複キーとして拒否
+
+`BLOB` カラムには `@ファイルパス` 形式でファイルの中身をバイナリとして保存できます。
+SELECTではバイナリ本体ではなくサイズを表示します。
+
+```text
+db > create table images (id integer primary key, name text, data blob)
+Executed.
+db > insert 1 usagi @usagi.png
+Executed.
+db > select id, name, data from images;
++----+-------+-----------------+
+| id | name  | data            |
++----+-------+-----------------+
+| 1  | usagi | BLOB(8085 bytes) |
++----+-------+-----------------+
+Executed.
+db >
+```
 
 ## SELECT
 

@@ -79,6 +79,7 @@ type Value struct {
 	Integer      int64
 	Real         float64
 	Text         string
+	Blob         []byte
 }
 
 // Table はページ配列を持つオンメモリのテーブルを表す。

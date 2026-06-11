@@ -105,7 +105,7 @@ func leafNodeFind(table *Table, pageNum uint32, key uint32) *Cursor {
 // カーソルが指している行の保存領域を返す。
 func cursorValue(cursor *Cursor) []byte {
 	page := getPage(cursor.Table.Pager, cursor.PageNum)
-	return leafNodeValue(page, cursor.CellNum)
+	return leafNodeValue(cursor.Table.Pager, page, cursor.CellNum)
 }
 
 // カーソルを次の行へ進める。

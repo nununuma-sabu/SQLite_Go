@@ -157,7 +157,7 @@ func leafNodeSplitAndInsert(cursor *Cursor, key uint32, value Row) {
 	setLeafNodeNextLeaf(newNode, leafNodeNextLeaf(oldNode))
 	setLeafNodeNextLeaf(oldNode, newPageNum)
 
-	cells := leafNodeCells(oldNode)
+	cells := leafNodeCells(cursor.Table.Pager, oldNode)
 	payload := make([]byte, serializedRowSize(value, cursor.Table.Schema))
 	serializeRow(value, cursor.Table.Schema, payload)
 	cells = append(cells, leafCell{})
@@ -171,13 +171,13 @@ func leafNodeSplitAndInsert(cursor *Cursor, key uint32, value Row) {
 	leftSplitCount := uint32((len(cells) + 1) / 2)
 	for i, cell := range cells {
 		if uint32(i) < leftSplitCount {
-			leafNodeWritePayloadCell(oldNode, uint32(i), cell.Key, cell.Payload)
+			leafNodeWritePayloadCell(cursor.Table.Pager, oldNode, uint32(i), cell.Key, cell.Payload)
 			setLeafNodeNumCells(oldNode, uint32(i)+1)
 			continue
 		}
 
 		indexWithinNode := uint32(i) - leftSplitCount
-		leafNodeWritePayloadCell(newNode, indexWithinNode, cell.Key, cell.Payload)
+		leafNodeWritePayloadCell(cursor.Table.Pager, newNode, indexWithinNode, cell.Key, cell.Payload)
 		setLeafNodeNumCells(newNode, indexWithinNode+1)
 	}
 
@@ -199,11 +199,11 @@ type leafCell struct {
 	Payload []byte
 }
 
-func leafNodeCells(node []byte) []leafCell {
+func leafNodeCells(pager *Pager, node []byte) []leafCell {
 	numCells := leafNodeNumCells(node)
 	cells := make([]leafCell, 0, numCells)
 	for i := uint32(0); i < numCells; i++ {
-		payload := leafNodeValue(node, i)
+		payload := leafNodeValue(pager, node, i)
 		payloadCopy := make([]byte, len(payload))
 		copy(payloadCopy, payload)
 		cells = append(cells, leafCell{
@@ -231,5 +231,5 @@ func leafNodeInsert(cursor *Cursor, key uint32, value Row) {
 	}
 
 	setLeafNodeNumCells(node, numCells+1)
-	leafNodeWriteCell(node, cursor.CellNum, key, value, cursor.Table.Schema)
+	leafNodeWriteCell(cursor.Table.Pager, node, cursor.CellNum, key, value, cursor.Table.Schema)
 }

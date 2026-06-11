@@ -6,6 +6,8 @@ import (
 	"io"
 )
 
+const overflowPayloadMagic = "OVF1"
+
 // ノード種別を読み取る。
 func getNodeType(node []byte) NodeType {
 	return NodeType(node[nodeTypeOffset])
@@ -170,7 +172,7 @@ func leafNodeCell(node []byte, cellNum uint32) []byte {
 
 func leafNodeCellSizeAt(node []byte, cellNum uint32) uint32 {
 	start := leafNodeCellOffset(node, cellNum)
-	payloadSize := binary.LittleEndian.Uint32(node[start+leafNodePayloadSizeOffset : start+leafNodeValueOffset])
+	payloadSize := leafNodeStoredPayloadSize(node, start)
 	return leafNodeValueOffset + payloadSize
 }
 
@@ -187,10 +189,35 @@ func setLeafNodeKey(node []byte, cellNum uint32, key uint32) {
 }
 
 // leaf node内の指定セルから値領域を返す。
-func leafNodeValue(node []byte, cellNum uint32) []byte {
+func leafNodeValue(pager *Pager, node []byte, cellNum uint32) []byte {
+	value := leafNodeLocalValue(node, cellNum)
+	if !leafNodeCellUsesOverflow(node, cellNum) {
+		return value
+	}
+	if len(value) < len(overflowPayloadMagic)+8 || string(value[:len(overflowPayloadMagic)]) != overflowPayloadMagic {
+		panic("invalid overflow payload")
+	}
+
+	totalSize := binary.LittleEndian.Uint32(value[len(overflowPayloadMagic) : len(overflowPayloadMagic)+4])
+	firstPageNum := binary.LittleEndian.Uint32(value[len(overflowPayloadMagic)+4 : len(overflowPayloadMagic)+8])
+	return readOverflowPayload(pager, firstPageNum, totalSize)
+}
+
+func leafNodeLocalValue(node []byte, cellNum uint32) []byte {
 	start := leafNodeCellOffset(node, cellNum)
-	payloadSize := binary.LittleEndian.Uint32(node[start+leafNodePayloadSizeOffset : start+leafNodeValueOffset])
+	payloadSize := leafNodeStoredPayloadSize(node, start)
 	return node[start+leafNodeValueOffset : start+leafNodeValueOffset+payloadSize]
+}
+
+func leafNodeStoredPayloadSize(node []byte, cellOffset uint32) uint32 {
+	raw := binary.LittleEndian.Uint32(node[cellOffset+leafNodePayloadSizeOffset : cellOffset+leafNodeValueOffset])
+	return raw &^ leafNodeOverflowPayloadFlag
+}
+
+func leafNodeCellUsesOverflow(node []byte, cellNum uint32) bool {
+	start := leafNodeCellOffset(node, cellNum)
+	raw := binary.LittleEndian.Uint32(node[start+leafNodePayloadSizeOffset : start+leafNodeValueOffset])
+	return raw&leafNodeOverflowPayloadFlag != 0
 }
 
 func leafNodePointerArrayEnd(numCells uint32) uint32 {
@@ -202,25 +229,98 @@ func leafNodeFreeSpace(node []byte) uint32 {
 }
 
 func leafNodeCanFit(node []byte, payloadSize uint32) bool {
-	return leafNodeFreeSpace(node) >= leafNodeCellPointerSize+leafNodeValueOffset+payloadSize
+	return leafNodeFreeSpace(node) >= leafNodeCellPointerSize+leafNodeValueOffset+leafNodeLocalPayloadSize(payloadSize)
 }
 
-func leafNodeWriteCell(node []byte, cellNum uint32, key uint32, row Row, schema TableSchema) {
+func leafNodeLocalPayloadSize(payloadSize uint32) uint32 {
+	if payloadSize > leafNodeMaxPayloadSize {
+		return uint32(len(overflowPayloadMagic) + 8)
+	}
+
+	return payloadSize
+}
+
+func leafNodeWriteCell(pager *Pager, node []byte, cellNum uint32, key uint32, row Row, schema TableSchema) {
 	payload := make([]byte, serializedRowSize(row, schema))
 	serializeRow(row, schema, payload)
-	leafNodeWritePayloadCell(node, cellNum, key, payload)
+	leafNodeWritePayloadCell(pager, node, cellNum, key, payload)
 }
 
-func leafNodeWritePayloadCell(node []byte, cellNum uint32, key uint32, payload []byte) {
+func leafNodeWritePayloadCell(pager *Pager, node []byte, cellNum uint32, key uint32, payload []byte) {
 	payloadSize := uint32(len(payload))
-	cellSize := leafNodeValueOffset + payloadSize
+	localPayload := payload
+	usesOverflow := payloadSize > leafNodeMaxPayloadSize
+	if usesOverflow {
+		firstPageNum := writeOverflowPayload(pager, payload)
+		localPayload = make([]byte, len(overflowPayloadMagic)+8)
+		copy(localPayload, overflowPayloadMagic)
+		binary.LittleEndian.PutUint32(localPayload[len(overflowPayloadMagic):len(overflowPayloadMagic)+4], payloadSize)
+		binary.LittleEndian.PutUint32(localPayload[len(overflowPayloadMagic)+4:len(overflowPayloadMagic)+8], firstPageNum)
+	}
+
+	localPayloadSize := uint32(len(localPayload))
+	cellSize := leafNodeValueOffset + localPayloadSize
 	cellOffset := leafNodeContentStart(node) - cellSize
 
 	setLeafNodeContentStart(node, cellOffset)
 	setLeafNodeCellOffset(node, cellNum, cellOffset)
 	binary.LittleEndian.PutUint32(node[cellOffset+leafNodeKeyOffset:cellOffset+leafNodePayloadSizeOffset], key)
-	binary.LittleEndian.PutUint32(node[cellOffset+leafNodePayloadSizeOffset:cellOffset+leafNodeValueOffset], payloadSize)
-	copy(node[cellOffset+leafNodeValueOffset:cellOffset+leafNodeValueOffset+payloadSize], payload)
+	storedPayloadSize := localPayloadSize
+	if usesOverflow {
+		storedPayloadSize |= leafNodeOverflowPayloadFlag
+	}
+	binary.LittleEndian.PutUint32(node[cellOffset+leafNodePayloadSizeOffset:cellOffset+leafNodeValueOffset], storedPayloadSize)
+	copy(node[cellOffset+leafNodeValueOffset:cellOffset+leafNodeValueOffset+localPayloadSize], localPayload)
+}
+
+func writeOverflowPayload(pager *Pager, payload []byte) uint32 {
+	firstPageNum := getUnusedPageNum(pager)
+	pageNum := firstPageNum
+	remaining := payload
+	for {
+		page := getPage(pager, pageNum)
+		clear(page)
+
+		chunkSize := len(remaining)
+		if chunkSize > overflowPagePayloadCapacity {
+			chunkSize = overflowPagePayloadCapacity
+		}
+		remaining = remaining[chunkSize:]
+
+		nextPageNum := uint32(0)
+		if len(remaining) > 0 {
+			nextPageNum = getUnusedPageNum(pager)
+		}
+
+		binary.LittleEndian.PutUint32(page[overflowPageNextPageOffset:overflowPagePayloadSizeOffset], nextPageNum)
+		binary.LittleEndian.PutUint32(page[overflowPagePayloadSizeOffset:overflowPageHeaderSize], uint32(chunkSize))
+		copy(page[overflowPageHeaderSize:overflowPageHeaderSize+chunkSize], payload[:chunkSize])
+		payload = payload[chunkSize:]
+
+		if nextPageNum == 0 {
+			break
+		}
+		pageNum = nextPageNum
+	}
+
+	return firstPageNum
+}
+
+func readOverflowPayload(pager *Pager, firstPageNum uint32, totalSize uint32) []byte {
+	payload := make([]byte, 0, totalSize)
+	pageNum := firstPageNum
+	for pageNum != 0 && uint32(len(payload)) < totalSize {
+		page := getPage(pager, pageNum)
+		nextPageNum := binary.LittleEndian.Uint32(page[overflowPageNextPageOffset:overflowPagePayloadSizeOffset])
+		chunkSize := binary.LittleEndian.Uint32(page[overflowPagePayloadSizeOffset:overflowPageHeaderSize])
+		payload = append(payload, page[overflowPageHeaderSize:overflowPageHeaderSize+chunkSize]...)
+		pageNum = nextPageNum
+	}
+	if uint32(len(payload)) != totalSize {
+		panic("overflow payload is truncated")
+	}
+
+	return payload
 }
 
 func leafNodeShiftCellPointersRight(node []byte, firstCell uint32, numCells uint32) {
