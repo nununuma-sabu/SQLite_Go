@@ -22,8 +22,10 @@
   - 完了: 集約関数 `count(*)`、`count(column)`、`min`、`max`、`sum`、`avg` を扱う。
   - 完了: `group by <column>` と集約関数を組み合わせる。
   - 完了: HAVINGでGROUP BY後の集約結果を条件で絞り込む。
+  - 完了: 同一テーブルのINNER JOINを扱う。
   - DISTINCT: 重複行を除外する。
   - 完了: 表名、カラム名、式の別名を扱う。
+  - 複数テーブル管理: 複数の実テーブルを作成・保存し、異なるテーブル同士のJOINを扱う。
   - 複数カラムORDER BY: `order by height desc, name asc` を扱う。
   - OFFSET: `limit` と組み合わせてページングできるようにする。
 - 更新処理: `update <id> ...` を追加し、既存レコードを書き換える。

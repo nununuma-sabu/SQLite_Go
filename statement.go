@@ -443,6 +443,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 			statement.SelectColumns = selectClause.Columns
 			statement.SelectItems = selectClause.Items
 			statement.SelectFromDual = selectClause.FromDual
+			statement.SelectJoin = selectClause.Join
 			statement.SelectWhere = selectClause.Where
 			statement.SelectGroupBy = selectClause.GroupBy
 			statement.SelectHaving = selectClause.Having
@@ -482,6 +483,7 @@ type selectClause struct {
 	Columns  []Column
 	Items    []SelectItem
 	FromDual bool
+	Join     *JoinClause
 	Where    WhereExpression
 	GroupBy  []Column
 	Having   HavingExpression
@@ -490,8 +492,9 @@ type selectClause struct {
 }
 
 type columnResolver struct {
-	Schema     TableSchema
-	TableAlias string
+	Schema         TableSchema
+	References     []TableReference
+	QualifyColumns bool
 }
 
 const (
@@ -500,21 +503,64 @@ const (
 	dualColumnValue = "X"
 )
 
-func newColumnResolver(schema TableSchema, tableAlias string) columnResolver {
-	return columnResolver{Schema: schema, TableAlias: tableAlias}
+func newColumnResolver(schema TableSchema, references []TableReference, qualifyColumns bool) columnResolver {
+	return columnResolver{Schema: schema, References: references, QualifyColumns: qualifyColumns}
 }
 
 func (resolver columnResolver) Column(name string) (Column, bool) {
 	qualifier, columnName, qualified := splitQualifiedName(name)
 	if qualified {
-		if !strings.EqualFold(qualifier, resolver.Schema.Name) &&
-			(resolver.TableAlias == "" || !strings.EqualFold(qualifier, resolver.TableAlias)) {
-			return Column{}, false
+		for _, reference := range resolver.References {
+			if referenceMatchesQualifier(reference, qualifier) {
+				return resolver.resolvedColumn(reference, columnName)
+			}
 		}
-		return resolver.Schema.Column(columnName)
+		return Column{}, false
 	}
 
-	return resolver.Schema.Column(name)
+	var resolved Column
+	matches := 0
+	for _, reference := range resolver.References {
+		column, ok := resolver.resolvedColumn(reference, name)
+		if ok {
+			resolved = column
+			matches++
+		}
+	}
+	if matches != 1 {
+		return Column{}, false
+	}
+
+	return resolved, true
+}
+
+func (resolver columnResolver) resolvedColumn(reference TableReference, columnName string) (Column, bool) {
+	column, ok := resolver.Schema.Column(columnName)
+	if !ok {
+		return Column{}, false
+	}
+	if resolver.QualifyColumns {
+		column.Name = qualifiedColumnName(reference, column.Name)
+	}
+
+	return column, true
+}
+
+func referenceMatchesQualifier(reference TableReference, qualifier string) bool {
+	return strings.EqualFold(reference.Name, qualifier) ||
+		(reference.Alias != "" && strings.EqualFold(reference.Alias, qualifier))
+}
+
+func qualifiedColumnName(reference TableReference, columnName string) string {
+	return referenceQualifier(reference) + "." + columnName
+}
+
+func referenceQualifier(reference TableReference) string {
+	if reference.Alias != "" {
+		return reference.Alias
+	}
+
+	return reference.Name
 }
 
 func splitQualifiedName(name string) (string, string, bool) {
@@ -607,19 +653,16 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		}
 	}
 
-	tableName, tableAlias, ok := parseTableReference(tableReference)
-	if !ok {
+	fromSource, result := parseFromSource(tableReference, schema)
+	if result != PrepareSuccess {
+		return selectClause{}, result
+	}
+	fromDual := fromSource.FromDual
+	sourceSchema := fromSource.Schema
+	resolver := fromSource.Resolver
+	if columnList == "" {
 		return selectClause{}, PrepareSyntaxError
 	}
-	fromDual := strings.EqualFold(tableName, dualTableName)
-	sourceSchema := schema
-	if fromDual {
-		sourceSchema = DualTableSchema()
-	}
-	if columnList == "" || tableName == "" || (!fromDual && !strings.EqualFold(tableName, schema.Name)) {
-		return selectClause{}, PrepareSyntaxError
-	}
-	resolver := newColumnResolver(sourceSchema, tableAlias)
 
 	if whereInput != "" {
 		expression, result := parseWhereExpression(whereInput, resolver)
@@ -651,10 +694,10 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	}
 
 	if columnList == "*" {
-		if len(groupBy) > 0 || having.Kind != WhereExpressionNone {
+		if fromSource.Join != nil || len(groupBy) > 0 || having.Kind != WhereExpressionNone {
 			return selectClause{}, PrepareSyntaxError
 		}
-		return selectClause{Columns: sourceSchema.Columns, Items: selectItemsFromColumns(sourceSchema.Columns), FromDual: fromDual, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+		return selectClause{Columns: sourceSchema.Columns, Items: selectItemsFromColumns(sourceSchema.Columns), FromDual: fromDual, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 	}
 
 	itemInputs, ok := splitSQLList(columnList)
@@ -699,7 +742,85 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		}
 	}
 
-	return selectClause{Columns: columns, Items: items, FromDual: fromDual, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+	return selectClause{Columns: columns, Items: items, FromDual: fromDual, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+}
+
+type fromSource struct {
+	Schema   TableSchema
+	FromDual bool
+	Join     *JoinClause
+	Resolver columnResolver
+}
+
+func parseFromSource(input string, schema TableSchema) (fromSource, PrepareResult) {
+	if joinIndex := findSelectJoinIndex(input); joinIndex >= 0 {
+		return parseJoinSource(input, joinIndex, schema)
+	}
+
+	reference, ok := parseTableReference(input)
+	if !ok {
+		return fromSource{}, PrepareSyntaxError
+	}
+	fromDual := strings.EqualFold(reference.Name, dualTableName)
+	sourceSchema := schema
+	if fromDual {
+		sourceSchema = DualTableSchema()
+	}
+	if !fromDual && !strings.EqualFold(reference.Name, schema.Name) {
+		return fromSource{}, PrepareSyntaxError
+	}
+
+	return fromSource{
+		Schema:   sourceSchema,
+		FromDual: fromDual,
+		Resolver: newColumnResolver(sourceSchema, []TableReference{reference}, false),
+	}, PrepareSuccess
+}
+
+func parseJoinSource(input string, joinIndex int, schema TableSchema) (fromSource, PrepareResult) {
+	leftInput := strings.TrimSpace(input[:joinIndex])
+	if strings.HasSuffix(strings.ToLower(leftInput), " inner") {
+		leftInput = strings.TrimSpace(leftInput[:len(leftInput)-len(" inner")])
+	}
+	rightAndOn := strings.TrimSpace(input[joinIndex+len(" join "):])
+	onIndex := findSelectOnIndex(rightAndOn)
+	if leftInput == "" || onIndex < 0 {
+		return fromSource{}, PrepareSyntaxError
+	}
+	rightInput := strings.TrimSpace(rightAndOn[:onIndex])
+	onInput := strings.TrimSpace(rightAndOn[onIndex+len(" on "):])
+	if rightInput == "" || onInput == "" {
+		return fromSource{}, PrepareSyntaxError
+	}
+
+	leftReference, ok := parseTableReference(leftInput)
+	if !ok {
+		return fromSource{}, PrepareSyntaxError
+	}
+	rightReference, ok := parseTableReference(rightInput)
+	if !ok {
+		return fromSource{}, PrepareSyntaxError
+	}
+	if !strings.EqualFold(leftReference.Name, schema.Name) || !strings.EqualFold(rightReference.Name, schema.Name) {
+		return fromSource{}, PrepareSyntaxError
+	}
+	if strings.EqualFold(referenceQualifier(leftReference), referenceQualifier(rightReference)) {
+		return fromSource{}, PrepareSyntaxError
+	}
+
+	resolver := newColumnResolver(schema, []TableReference{leftReference, rightReference}, true)
+	onExpression, result := parseHavingExpression(onInput, resolver)
+	if result != PrepareSuccess || havingExpressionContainsAggregate(onExpression) {
+		return fromSource{}, PrepareSyntaxError
+	}
+	join := &JoinClause{Left: leftReference, Right: rightReference, On: onExpression}
+
+	return fromSource{
+		Schema:   schema,
+		FromDual: false,
+		Join:     join,
+		Resolver: resolver,
+	}, PrepareSuccess
 }
 
 func DualTableSchema() TableSchema {
@@ -727,23 +848,23 @@ func dualRow() Row {
 	}
 }
 
-func parseTableReference(input string) (string, string, bool) {
+func parseTableReference(input string) (TableReference, bool) {
 	fields := strings.Fields(strings.TrimSpace(input))
 	switch len(fields) {
 	case 1:
-		return fields[0], "", true
+		return TableReference{Name: fields[0]}, true
 	case 2:
 		if strings.EqualFold(fields[1], "as") || !isIdentifier(fields[1]) {
-			return "", "", false
+			return TableReference{}, false
 		}
-		return fields[0], fields[1], true
+		return TableReference{Name: fields[0], Alias: fields[1]}, true
 	case 3:
 		if !strings.EqualFold(fields[1], "as") || !isIdentifier(fields[2]) {
-			return "", "", false
+			return TableReference{}, false
 		}
-		return fields[0], fields[2], true
+		return TableReference{Name: fields[0], Alias: fields[2]}, true
 	default:
-		return "", "", false
+		return TableReference{}, false
 	}
 }
 
@@ -922,6 +1043,14 @@ func findSelectWhereIndex(body string) int {
 	return -1
 }
 
+func findSelectJoinIndex(body string) int {
+	return findTopLevelClauseIndex(body, " join ")
+}
+
+func findSelectOnIndex(body string) int {
+	return findTopLevelClauseIndex(body, " on ")
+}
+
 func findSelectOrderByIndex(body string) int {
 	lower := strings.ToLower(body)
 	inString := false
@@ -935,6 +1064,41 @@ func findSelectOrderByIndex(body string) int {
 			continue
 		}
 		if !inString && strings.HasPrefix(lower[i:], " order by ") {
+			return i
+		}
+	}
+
+	return -1
+}
+
+func findTopLevelClauseIndex(body string, clause string) int {
+	lower := strings.ToLower(body)
+	inString := false
+	depth := 0
+	for i := 0; i <= len(lower)-len(clause); i++ {
+		if body[i] == '\'' {
+			if inString && i+1 < len(body) && body[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch body[i] {
+		case '(':
+			depth++
+			continue
+		case ')':
+			depth--
+			if depth < 0 {
+				return -1
+			}
+			continue
+		}
+		if depth == 0 && strings.HasPrefix(lower[i:], clause) {
 			return i
 		}
 	}
@@ -1397,6 +1561,21 @@ func havingExpressionIsValidForGrouping(expression HavingExpression, groupBy []C
 			expression.Right != nil &&
 			havingExpressionIsValidForGrouping(*expression.Left, groupBy) &&
 			havingExpressionIsValidForGrouping(*expression.Right, groupBy)
+	default:
+		return false
+	}
+}
+
+func havingExpressionContainsAggregate(expression HavingExpression) bool {
+	switch expression.Kind {
+	case WhereExpressionNone:
+		return false
+	case WhereExpressionCondition:
+		return expressionContainsAggregate(expression.Condition.Left) ||
+			expressionContainsAggregate(expression.Condition.Right)
+	case WhereExpressionAnd, WhereExpressionOr:
+		return (expression.Left != nil && havingExpressionContainsAggregate(*expression.Left)) ||
+			(expression.Right != nil && havingExpressionContainsAggregate(*expression.Right))
 	default:
 		return false
 	}
@@ -2696,6 +2875,9 @@ func selectRows(statement *Statement, table *Table) []Row {
 		}
 		return nil
 	}
+	if statement.SelectJoin != nil {
+		return selectJoinedRows(statement, table)
+	}
 
 	if statement.SelectByKey != nil {
 		cursor := tableFind(table, *statement.SelectByKey)
@@ -2720,6 +2902,45 @@ func selectRows(statement *Statement, table *Table) []Row {
 	}
 
 	return rows
+}
+
+func selectJoinedRows(statement *Statement, table *Table) []Row {
+	baseRows := readAllRows(table)
+	rows := []Row{}
+	for _, left := range baseRows {
+		for _, right := range baseRows {
+			joined := joinRows(left, statement.SelectJoin.Left, right, statement.SelectJoin.Right, table.Schema)
+			if !groupMatchesHaving([]Row{joined}, joined, statement.SelectJoin.On) {
+				continue
+			}
+			if rowMatchesWhere(joined, statement.SelectWhere) {
+				rows = append(rows, joined)
+			}
+		}
+	}
+
+	return rows
+}
+
+func readAllRows(table *Table) []Row {
+	rows := []Row{}
+	cursor := tableStart(table)
+	for !cursor.EndOfTable {
+		rows = append(rows, deserializeRow(cursorValue(cursor), table.Schema))
+		cursorAdvance(cursor)
+	}
+
+	return rows
+}
+
+func joinRows(left Row, leftReference TableReference, right Row, rightReference TableReference, schema TableSchema) Row {
+	values := make(map[string]Value, len(schema.Columns)*2)
+	for _, column := range schema.Columns {
+		values[qualifiedColumnName(leftReference, column.Name)] = rowValue(left, column)
+		values[qualifiedColumnName(rightReference, column.Name)] = rowValue(right, column)
+	}
+
+	return Row{Values: values}
 }
 
 func sortRows(rows []Row, orderBy OrderByClause) {

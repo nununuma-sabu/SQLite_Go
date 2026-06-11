@@ -177,6 +177,21 @@ Executed.
 db >
 ```
 
+`JOIN ... ON ...` で、同じ保存テーブルを複数の別名で参照する自己結合ができます。
+現在のDBは単一テーブル構成のため、結合対象は同じテーブル名に限ります。
+
+```text
+db > select a.name as shorter, b.name as taller
+   > from people a join people b on a.height < b.height;
++---------+--------+
+| shorter | taller |
++---------+--------+
+| Alice   | Bob    |
++---------+--------+
+Executed.
+db >
+```
+
 数値型のカラムや数値リテラルは、SELECT句で `+`、`-`、`*`、`/` の四則演算に使えます。
 `*` と `/` は `+` と `-` より先に評価し、括弧で評価順を指定できます。
 ゼロ除算やNULLを含む演算結果は `NULL` として表示します。

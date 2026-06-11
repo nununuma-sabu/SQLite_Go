@@ -1022,6 +1022,84 @@ func TestRunPrintsSyntaxErrorForInvalidAliases(t *testing.T) {
 	}
 }
 
+func TestRunExecutesInnerJoinWithAliases(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real)",
+		"insert 1 Alice 152.5",
+		"insert 2 Bob 181",
+		"insert 3 Carol 158.9",
+		"SELECT a.name AS shorter, b.name AS taller FROM people a JOIN people b ON a.height < b.height WHERE a.id = 1 ORDER BY b.id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"shorter", "taller"},
+		[]string{"Alice", "Bob"},
+		[]string{"Alice", "Carol"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesInnerJoinWithGroupBy(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table employees (id integer primary key, name text, manager_id integer)",
+		"insert 1 Alice null",
+		"insert 2 Bob 1",
+		"insert 3 Carol 1",
+		"SELECT m.name AS manager, count(*) AS reports FROM employees e JOIN employees m ON e.manager_id = m.id GROUP BY m.name HAVING count(*) >= 2;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"manager", "reports"},
+		[]string{"Alice", "2"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPrintsSyntaxErrorForInvalidJoin(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text)",
+		"SELECT name FROM people a JOIN people b ON a.id = b.id;",
+		"SELECT a.name FROM people a JOIN missing b ON a.id = b.id;",
+		"SELECT a.name FROM people a JOIN people a ON a.id = a.id;",
+		"SELECT a.name FROM people a JOIN people b;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunStoresBlobFromFile(t *testing.T) {
 	dir := t.TempDir()
 	blobPath := filepath.Join(dir, "sample.bin")

@@ -11,12 +11,26 @@ type Statement struct {
 	SelectColumns  []Column
 	SelectItems    []SelectItem
 	SelectFromDual bool
+	SelectJoin     *JoinClause
 	SelectWhere    WhereExpression
 	SelectGroupBy  []Column
 	SelectHaving   HavingExpression
 	SelectOrderBy  *OrderByClause
 	SelectLimit    *uint32
 	Schema         TableSchema
+}
+
+// TableReference はFROM句に現れるテーブル参照を表す。
+type TableReference struct {
+	Name  string
+	Alias string
+}
+
+// JoinClause はINNER JOINの対象とON条件を表す。
+type JoinClause struct {
+	Left  TableReference
+	Right TableReference
+	On    HavingExpression
 }
 
 // SelectItem はSELECT句に指定された表示対象を表す。
