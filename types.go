@@ -11,6 +11,7 @@ type Statement struct {
 	SelectColumns []Column
 	SelectItems   []SelectItem
 	SelectWhere   WhereExpression
+	SelectGroupBy []Column
 	SelectOrderBy *OrderByClause
 	SelectLimit   *uint32
 	Schema        TableSchema
@@ -27,6 +28,9 @@ type ValueExpression struct {
 	Kind     ValueExpressionKind
 	Column   Column
 	Value    Value
+	Function AggregateFunction
+	CountAll bool
+	Argument *ValueExpression
 	Operator ArithmeticOperator
 	Left     *ValueExpression
 	Right    *ValueExpression
@@ -38,7 +42,19 @@ type ValueExpressionKind int
 const (
 	ValueExpressionColumn ValueExpressionKind = iota
 	ValueExpressionLiteral
+	ValueExpressionAggregate
 	ValueExpressionBinary
+)
+
+// AggregateFunction はSELECT句で使える集約関数を表す。
+type AggregateFunction int
+
+const (
+	AggregateCount AggregateFunction = iota
+	AggregateSum
+	AggregateAvg
+	AggregateMin
+	AggregateMax
 )
 
 // ArithmeticOperator は数値式で使える演算子を表す。

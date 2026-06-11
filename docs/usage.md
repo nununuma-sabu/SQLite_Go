@@ -235,6 +235,30 @@ Executed.
 db >
 ```
 
+集約関数として `count(*)`、`count(column)`、`sum(column)`、`avg(column)`、`min(column)`、`max(column)` を使えます。
+`group by <column>` を指定すると、カラム値ごとに集約します。
+
+```text
+db > create table sales (id integer primary key, region text, amount integer)
+Executed.
+db > insert 1 East 10
+Executed.
+db > insert 2 East 20
+Executed.
+db > insert 3 West 7
+Executed.
+db > select region, count(*), sum(amount), avg(amount) from sales group by region;
++--------+----------+-------------+-------------+
+| region | count(*) | sum(amount) | avg(amount) |
++--------+----------+-------------+-------------+
+| East   | 2        | 30          | 15          |
++--------+----------+-------------+-------------+
+| West   | 1        | 7           | 7           |
++--------+----------+-------------+-------------+
+Executed.
+db >
+```
+
 `order by` で結果を並び替えできます。
 方向は `asc` / `desc` を指定でき、省略時は `asc` です。
 

@@ -18,8 +18,8 @@
   - 完了: `order by <column> asc|desc` を扱う。
   - 完了: `limit <count>` を扱う。
   - 完了: SELECT句で数値型の四則演算を扱う。
-  - 集約関数: `count(*)`、`count(column)`、`min`、`max`、`sum`、`avg` を扱う。
-  - GROUP BY: `group by <column>` と集約関数を組み合わせる。
+  - 完了: 集約関数 `count(*)`、`count(column)`、`min`、`max`、`sum`、`avg` を扱う。
+  - 完了: `group by <column>` と集約関数を組み合わせる。
   - HAVING: GROUP BY後の集約結果を条件で絞り込む。
   - DISTINCT: 重複行を除外する。
   - 式・別名: `select name as display_name` のような表示名を扱う。

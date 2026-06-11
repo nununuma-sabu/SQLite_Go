@@ -443,6 +443,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 			statement.SelectColumns = selectClause.Columns
 			statement.SelectItems = selectClause.Items
 			statement.SelectWhere = selectClause.Where
+			statement.SelectGroupBy = selectClause.GroupBy
 			statement.SelectOrderBy = selectClause.OrderBy
 			statement.SelectLimit = selectClause.Limit
 			return PrepareSuccess
@@ -479,6 +480,7 @@ type selectClause struct {
 	Columns []Column
 	Items   []SelectItem
 	Where   WhereExpression
+	GroupBy []Column
 	OrderBy *OrderByClause
 	Limit   *uint32
 }
@@ -530,12 +532,25 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		orderBy = &clause
 	}
 
-	whereIndex := findSelectWhereIndex(tableAndWhere)
-	tableName := tableAndWhere
+	groupByIndex := findSelectGroupByIndex(tableAndWhere)
+	tableAndWhereOnly := tableAndWhere
+	var groupBy []Column
+	if groupByIndex >= 0 {
+		tableAndWhereOnly = strings.TrimSpace(tableAndWhere[:groupByIndex])
+		groupByInput := strings.TrimSpace(tableAndWhere[groupByIndex+len(" group by "):])
+		columns, result := parseGroupByClause(groupByInput, schema)
+		if result != PrepareSuccess {
+			return selectClause{}, result
+		}
+		groupBy = columns
+	}
+
+	whereIndex := findSelectWhereIndex(tableAndWhereOnly)
+	tableName := tableAndWhereOnly
 	var where WhereExpression
 	if whereIndex >= 0 {
-		tableName = strings.TrimSpace(tableAndWhere[:whereIndex])
-		whereInput := strings.TrimSpace(tableAndWhere[whereIndex+len(" where "):])
+		tableName = strings.TrimSpace(tableAndWhereOnly[:whereIndex])
+		whereInput := strings.TrimSpace(tableAndWhereOnly[whereIndex+len(" where "):])
 		if whereInput == "" {
 			return selectClause{}, PrepareSyntaxError
 		}
@@ -550,7 +565,10 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	}
 
 	if columnList == "*" {
-		return selectClause{Columns: schema.Columns, Items: selectItemsFromColumns(schema.Columns), Where: where, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+		if len(groupBy) > 0 {
+			return selectClause{}, PrepareSyntaxError
+		}
+		return selectClause{Columns: schema.Columns, Items: selectItemsFromColumns(schema.Columns), Where: where, GroupBy: groupBy, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 	}
 
 	itemInputs, ok := splitSQLList(columnList)
@@ -576,8 +594,11 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 
 		items = append(items, SelectItem{Header: itemInput, Expression: expression})
 	}
+	if !selectItemsAreValidForGrouping(items, groupBy) {
+		return selectClause{}, PrepareSyntaxError
+	}
 
-	return selectClause{Columns: columns, Items: items, Where: where, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+	return selectClause{Columns: columns, Items: items, Where: where, GroupBy: groupBy, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 }
 
 func selectItemsFromColumns(columns []Column) []SelectItem {
@@ -655,6 +676,26 @@ func findSelectOrderByIndex(body string) int {
 	return -1
 }
 
+func findSelectGroupByIndex(body string) int {
+	lower := strings.ToLower(body)
+	inString := false
+	for i := 0; i <= len(lower)-len(" group by "); i++ {
+		if body[i] == '\'' {
+			if inString && i+1 < len(body) && body[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if !inString && strings.HasPrefix(lower[i:], " group by ") {
+			return i
+		}
+	}
+
+	return -1
+}
+
 func findSelectLimitIndex(body string) int {
 	lower := strings.ToLower(body)
 	inString := false
@@ -687,6 +728,25 @@ func parseLimitClause(input string) (uint32, PrepareResult) {
 	}
 
 	return uint32(limit), PrepareSuccess
+}
+
+func parseGroupByClause(input string, schema TableSchema) ([]Column, PrepareResult) {
+	columnNames, ok := splitSQLList(input)
+	if !ok || len(columnNames) == 0 {
+		return nil, PrepareSyntaxError
+	}
+
+	columns := make([]Column, 0, len(columnNames))
+	for _, columnName := range columnNames {
+		columnName = strings.TrimSpace(columnName)
+		column, ok := schema.Column(columnName)
+		if columnName == "" || !ok {
+			return nil, PrepareSyntaxError
+		}
+		columns = append(columns, column)
+	}
+
+	return columns, PrepareSuccess
 }
 
 func parseOrderByClause(input string, schema TableSchema) (OrderByClause, PrepareResult) {
@@ -733,12 +793,67 @@ func parseValueExpression(input string, schema TableSchema) (ValueExpression, Pr
 	return expression, PrepareSuccess
 }
 
+func selectItemsAreValidForGrouping(items []SelectItem, groupBy []Column) bool {
+	hasAggregate := false
+	for _, item := range items {
+		if expressionContainsAggregate(item.Expression) {
+			hasAggregate = true
+			break
+		}
+	}
+	if !hasAggregate && len(groupBy) == 0 {
+		return true
+	}
+
+	for _, item := range items {
+		if expressionContainsAggregate(item.Expression) {
+			continue
+		}
+		if item.Expression.Kind != ValueExpressionColumn || !columnInList(item.Expression.Column, groupBy) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func expressionContainsAggregate(expression ValueExpression) bool {
+	switch expression.Kind {
+	case ValueExpressionAggregate:
+		return true
+	case ValueExpressionBinary:
+		return (expression.Left != nil && expressionContainsAggregate(*expression.Left)) ||
+			(expression.Right != nil && expressionContainsAggregate(*expression.Right))
+	default:
+		return false
+	}
+}
+
+func columnInList(column Column, columns []Column) bool {
+	for _, candidate := range columns {
+		if strings.EqualFold(column.Name, candidate.Name) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func isNumericExpression(expression ValueExpression) bool {
 	switch expression.Kind {
 	case ValueExpressionColumn:
 		return expression.Column.Affinity == AffinityInteger || expression.Column.Affinity == AffinityReal
 	case ValueExpressionLiteral:
 		return isNumericValue(expression.Value)
+	case ValueExpressionAggregate:
+		switch expression.Function {
+		case AggregateCount, AggregateSum, AggregateAvg:
+			return true
+		case AggregateMin, AggregateMax:
+			return expression.Argument != nil && isNumericExpression(*expression.Argument)
+		default:
+			return false
+		}
 	case ValueExpressionBinary:
 		if expression.Left == nil || expression.Right == nil {
 			return false
@@ -821,6 +936,9 @@ func (parser *valueExpressionParser) parsePrimary() (ValueExpression, PrepareRes
 		return ValueExpression{}, PrepareSyntaxError
 	}
 
+	if function, ok := parseAggregateFunctionName(token.Value); ok && parser.peekValue("(") {
+		return parser.parseAggregateExpression(function)
+	}
 	if column, ok := parser.Schema.Column(token.Value); ok {
 		return ValueExpression{Kind: ValueExpressionColumn, Column: column}, PrepareSuccess
 	}
@@ -829,6 +947,50 @@ func (parser *valueExpressionParser) parsePrimary() (ValueExpression, PrepareRes
 	}
 
 	return ValueExpression{}, PrepareSyntaxError
+}
+
+func (parser *valueExpressionParser) parseAggregateExpression(function AggregateFunction) (ValueExpression, PrepareResult) {
+	if !parser.matchValue("(") {
+		return ValueExpression{}, PrepareSyntaxError
+	}
+	if function == AggregateCount && parser.matchValue("*") {
+		if !parser.matchValue(")") {
+			return ValueExpression{}, PrepareSyntaxError
+		}
+		return ValueExpression{Kind: ValueExpressionAggregate, Function: function, CountAll: true}, PrepareSuccess
+	}
+
+	argument, result := parser.parseAdditive()
+	if result != PrepareSuccess || !parser.matchValue(")") {
+		return ValueExpression{}, PrepareSyntaxError
+	}
+	if function == AggregateSum || function == AggregateAvg {
+		if !isNumericExpression(argument) {
+			return ValueExpression{}, PrepareSyntaxError
+		}
+	}
+	if expressionContainsAggregate(argument) {
+		return ValueExpression{}, PrepareSyntaxError
+	}
+
+	return ValueExpression{Kind: ValueExpressionAggregate, Function: function, Argument: &argument}, PrepareSuccess
+}
+
+func parseAggregateFunctionName(input string) (AggregateFunction, bool) {
+	switch strings.ToLower(input) {
+	case "count":
+		return AggregateCount, true
+	case "sum":
+		return AggregateSum, true
+	case "avg":
+		return AggregateAvg, true
+	case "min":
+		return AggregateMin, true
+	case "max":
+		return AggregateMax, true
+	default:
+		return AggregateCount, false
+	}
 }
 
 func (parser *valueExpressionParser) consume() (insertField, bool) {
@@ -850,6 +1012,14 @@ func (parser *valueExpressionParser) matchValue(value string) bool {
 	}
 	parser.Position++
 	return true
+}
+
+func (parser *valueExpressionParser) peekValue(value string) bool {
+	if parser.Position >= len(parser.Tokens) {
+		return false
+	}
+	token := parser.Tokens[parser.Position]
+	return !token.Quoted && token.Value == value
 }
 
 func (parser *valueExpressionParser) matchArithmeticOperator(values ...string) (ArithmeticOperator, bool) {
@@ -1451,6 +1621,14 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	if statement.SelectOrderBy != nil {
 		sortRows(rows, *statement.SelectOrderBy)
 	}
+	if len(statement.SelectGroupBy) > 0 || selectItemsContainAggregate(items) {
+		valueRows := aggregateSelectRows(rows, items, statement.SelectGroupBy)
+		valueRows = limitValueRows(valueRows, statement.SelectLimit)
+		if len(valueRows) > 0 {
+			printValueRows(selectItemHeaders(items), valueRows, out)
+		}
+		return ExecuteSuccess
+	}
 	rows = limitRows(rows, statement.SelectLimit)
 
 	if len(rows) > 0 {
@@ -1458,6 +1636,110 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	}
 
 	return ExecuteSuccess
+}
+
+func selectItemsContainAggregate(items []SelectItem) bool {
+	for _, item := range items {
+		if expressionContainsAggregate(item.Expression) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func selectItemHeaders(items []SelectItem) []string {
+	headers := make([]string, 0, len(items))
+	for _, item := range items {
+		headers = append(headers, item.Header)
+	}
+
+	return headers
+}
+
+func aggregateSelectRows(rows []Row, items []SelectItem, groupBy []Column) [][]Value {
+	groups := groupRows(rows, groupBy)
+	valueRows := make([][]Value, 0, len(groups))
+	for _, group := range groups {
+		values := make([]Value, 0, len(items))
+		for _, item := range items {
+			value, ok := evaluateGroupedValueExpression(group.Rows, group.Representative, item.Expression)
+			if !ok {
+				value = Value{StorageClass: StorageNull}
+			}
+			values = append(values, value)
+		}
+		valueRows = append(valueRows, values)
+	}
+
+	return valueRows
+}
+
+type rowGroup struct {
+	Key            string
+	Representative Row
+	Rows           []Row
+}
+
+func groupRows(rows []Row, groupBy []Column) []rowGroup {
+	if len(groupBy) == 0 {
+		return []rowGroup{{Rows: rows}}
+	}
+
+	groups := []rowGroup{}
+	groupIndexes := map[string]int{}
+	for _, row := range rows {
+		key := groupKey(row, groupBy)
+		index, ok := groupIndexes[key]
+		if !ok {
+			groups = append(groups, rowGroup{Key: key, Representative: row})
+			index = len(groups) - 1
+			groupIndexes[key] = index
+		}
+		groups[index].Rows = append(groups[index].Rows, row)
+	}
+
+	return groups
+}
+
+func groupKey(row Row, columns []Column) string {
+	parts := make([]string, 0, len(columns))
+	for _, column := range columns {
+		parts = append(parts, valueKey(rowValue(row, column)))
+	}
+
+	return strings.Join(parts, "\x00")
+}
+
+func valueKey(value Value) string {
+	switch value.StorageClass {
+	case StorageNull:
+		return "n:"
+	case StorageInteger:
+		return "i:" + strconv.FormatInt(value.Integer, 10)
+	case StorageReal:
+		return "r:" + strconv.FormatFloat(value.Real, 'g', -1, 64)
+	case StorageText:
+		return "t:" + value.Text
+	case StorageBlob:
+		return "b:" + string(value.Blob)
+	default:
+		return "?:"
+	}
+}
+
+func limitValueRows(rows [][]Value, limit *uint32) [][]Value {
+	if limit == nil {
+		return rows
+	}
+	if *limit == 0 {
+		return nil
+	}
+	if uint32(len(rows)) <= *limit {
+		return rows
+	}
+
+	return rows[:*limit]
 }
 
 func printSelectRows(rows []Row, items []SelectItem, out io.Writer) {
@@ -1504,6 +1786,150 @@ func evaluateValueExpression(row Row, expression ValueExpression) (Value, bool) 
 	default:
 		return Value{}, false
 	}
+}
+
+func evaluateGroupedValueExpression(rows []Row, representative Row, expression ValueExpression) (Value, bool) {
+	switch expression.Kind {
+	case ValueExpressionAggregate:
+		return evaluateAggregate(rows, expression)
+	case ValueExpressionColumn:
+		return rowValue(representative, expression.Column), true
+	case ValueExpressionLiteral:
+		return expression.Value, true
+	case ValueExpressionBinary:
+		if expression.Left == nil || expression.Right == nil {
+			return Value{}, false
+		}
+		left, ok := evaluateGroupedValueExpression(rows, representative, *expression.Left)
+		if !ok {
+			return Value{}, false
+		}
+		right, ok := evaluateGroupedValueExpression(rows, representative, *expression.Right)
+		if !ok {
+			return Value{}, false
+		}
+		return evaluateArithmetic(left, right, expression.Operator)
+	default:
+		return Value{}, false
+	}
+}
+
+func evaluateAggregate(rows []Row, expression ValueExpression) (Value, bool) {
+	switch expression.Function {
+	case AggregateCount:
+		if expression.CountAll {
+			return Value{StorageClass: StorageInteger, Integer: int64(len(rows))}, true
+		}
+		count := int64(0)
+		for _, row := range rows {
+			value, ok := evaluateValueExpression(row, *expression.Argument)
+			if ok && value.StorageClass != StorageNull {
+				count++
+			}
+		}
+		return Value{StorageClass: StorageInteger, Integer: count}, true
+	case AggregateSum:
+		return evaluateSum(rows, *expression.Argument)
+	case AggregateAvg:
+		return evaluateAvg(rows, *expression.Argument)
+	case AggregateMin:
+		return evaluateMinMax(rows, *expression.Argument, false)
+	case AggregateMax:
+		return evaluateMinMax(rows, *expression.Argument, true)
+	default:
+		return Value{}, false
+	}
+}
+
+func evaluateSum(rows []Row, argument ValueExpression) (Value, bool) {
+	sumInteger := int64(0)
+	sumReal := float64(0)
+	hasReal := false
+	hasValue := false
+	for _, row := range rows {
+		value, ok := evaluateValueExpression(row, argument)
+		if !ok {
+			return Value{}, false
+		}
+		if value.StorageClass == StorageNull {
+			continue
+		}
+		if !isNumericValue(value) {
+			return Value{}, false
+		}
+		hasValue = true
+		if value.StorageClass == StorageReal {
+			hasReal = true
+		}
+		if hasReal {
+			sumReal += numericValueAsReal(value)
+			continue
+		}
+		sumInteger += value.Integer
+	}
+	if !hasValue {
+		return Value{StorageClass: StorageNull}, true
+	}
+	if hasReal {
+		return Value{StorageClass: StorageReal, Real: sumReal + float64(sumInteger)}, true
+	}
+
+	return Value{StorageClass: StorageInteger, Integer: sumInteger}, true
+}
+
+func evaluateAvg(rows []Row, argument ValueExpression) (Value, bool) {
+	sum := float64(0)
+	count := int64(0)
+	for _, row := range rows {
+		value, ok := evaluateValueExpression(row, argument)
+		if !ok {
+			return Value{}, false
+		}
+		if value.StorageClass == StorageNull {
+			continue
+		}
+		if !isNumericValue(value) {
+			return Value{}, false
+		}
+		sum += numericValueAsReal(value)
+		count++
+	}
+	if count == 0 {
+		return Value{StorageClass: StorageNull}, true
+	}
+
+	return Value{StorageClass: StorageReal, Real: sum / float64(count)}, true
+}
+
+func evaluateMinMax(rows []Row, argument ValueExpression, findMax bool) (Value, bool) {
+	var result Value
+	hasValue := false
+	for _, row := range rows {
+		value, ok := evaluateValueExpression(row, argument)
+		if !ok {
+			return Value{}, false
+		}
+		if value.StorageClass == StorageNull {
+			continue
+		}
+		if !hasValue {
+			result = value
+			hasValue = true
+			continue
+		}
+		comparison, ok := compareValues(value, result)
+		if !ok {
+			return Value{}, false
+		}
+		if (findMax && comparison > 0) || (!findMax && comparison < 0) {
+			result = value
+		}
+	}
+	if !hasValue {
+		return Value{StorageClass: StorageNull}, true
+	}
+
+	return result, true
 }
 
 func evaluateArithmetic(left Value, right Value, operator ArithmeticOperator) (Value, bool) {

@@ -669,6 +669,105 @@ func TestRunPrintsSyntaxErrorForInvalidSelectArithmeticExpression(t *testing.T) 
 	}
 }
 
+func TestRunExecutesAggregateFunctions(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table sales (id integer primary key, region text, amount integer, score real)",
+		"insert 1 East 10 1.5",
+		"insert 2 East 20 2.5",
+		"insert 3 West null 4",
+		"SELECT count(*), count(amount), sum(amount), avg(score), min(region), max(amount), sum(amount) / count(amount) FROM sales;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"count(*)", "count(amount)", "sum(amount)", "avg(score)", "min(region)", "max(amount)", "sum(amount) / count(amount)"},
+		[]string{"3", "2", "30", "2.6666666666666665", "East", "20", "15"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesGroupByAggregates(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table sales (id integer primary key, region text, amount integer, score real)",
+		"insert 1 East 10 1.5",
+		"insert 2 East 20 2.5",
+		"insert 3 West 7 null",
+		"SELECT region, count(*), sum(amount), avg(score), min(amount), max(amount) FROM sales GROUP BY region;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"region", "count(*)", "sum(amount)", "avg(score)", "min(amount)", "max(amount)"},
+		[]string{"East", "2", "30", "2", "10", "20"},
+		[]string{"West", "1", "7", "NULL", "7", "7"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesAggregateOnEmptyTable(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table sales (id integer primary key, amount integer)",
+		"SELECT count(*), sum(amount), avg(amount), min(amount), max(amount) FROM sales;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"count(*)", "sum(amount)", "avg(amount)", "min(amount)", "max(amount)"},
+		[]string{"0", "NULL", "NULL", "NULL", "NULL"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPrintsSyntaxErrorForInvalidAggregateSelect(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table sales (id integer primary key, region text, amount integer)",
+		"SELECT region, count(*) FROM sales;",
+		"SELECT region, count(*) FROM sales GROUP BY missing;",
+		"SELECT sum(region) FROM sales;",
+		"SELECT count(*) + region FROM sales GROUP BY region;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesSelectColumnsFromCustomTable(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table tbl1 (id integer primary key, column1 text, column2 real)",
