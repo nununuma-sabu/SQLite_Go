@@ -600,6 +600,75 @@ func TestRunExecutesSelectOrderByLimit(t *testing.T) {
 	}
 }
 
+func TestRunExecutesSelectArithmeticExpressions(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real, weight integer)",
+		"insert 1 Alice 152.5 45",
+		"insert 2 Bob 181 72",
+		"SELECT name, height + 10, weight * 2, (height + weight) / 2 FROM people ORDER BY id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"name", "height + 10", "weight * 2", "(height + weight) / 2"},
+		[]string{"Alice", "162.5", "90", "98.75"},
+		[]string{"Bob", "191", "144", "126.5"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesSelectArithmeticWithNullAndDivisionByZero(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table scores (id integer primary key, points integer, bonus real)",
+		"insert 1 10 2.5",
+		"insert 2 null 1.5",
+		"SELECT id, points + bonus, points / 0 FROM scores ORDER BY id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"id", "points + bonus", "points / 0"},
+		[]string{"1", "12.5", "NULL"},
+		[]string{"2", "NULL", "NULL"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPrintsSyntaxErrorForInvalidSelectArithmeticExpression(t *testing.T) {
+	got := runTempScript(t, []string{
+		"SELECT username + 1 FROM users;",
+		"SELECT id + FROM users;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesSelectColumnsFromCustomTable(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table tbl1 (id integer primary key, column1 text, column2 real)",

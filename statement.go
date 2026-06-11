@@ -441,6 +441,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 				return result
 			}
 			statement.SelectColumns = selectClause.Columns
+			statement.SelectItems = selectClause.Items
 			statement.SelectWhere = selectClause.Where
 			statement.SelectOrderBy = selectClause.OrderBy
 			statement.SelectLimit = selectClause.Limit
@@ -476,6 +477,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 
 type selectClause struct {
 	Columns []Column
+	Items   []SelectItem
 	Where   WhereExpression
 	OrderBy *OrderByClause
 	Limit   *uint32
@@ -548,27 +550,49 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	}
 
 	if columnList == "*" {
-		return selectClause{Columns: schema.Columns, Where: where, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+		return selectClause{Columns: schema.Columns, Items: selectItemsFromColumns(schema.Columns), Where: where, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 	}
 
-	columnNames, ok := splitSQLList(columnList)
+	itemInputs, ok := splitSQLList(columnList)
 	if !ok {
 		return selectClause{}, PrepareSyntaxError
 	}
-	columns := make([]Column, 0, len(columnNames))
-	for _, columnName := range columnNames {
-		columnName = strings.TrimSpace(columnName)
-		if columnName == "" || columnName == "*" {
+	columns := make([]Column, 0, len(itemInputs))
+	items := make([]SelectItem, 0, len(itemInputs))
+	for _, itemInput := range itemInputs {
+		itemInput = strings.TrimSpace(itemInput)
+		if itemInput == "" || itemInput == "*" {
 			return selectClause{}, PrepareSyntaxError
 		}
-		column, ok := schema.Column(columnName)
-		if !ok {
+		expression, result := parseValueExpression(itemInput, schema)
+		if result != PrepareSuccess {
 			return selectClause{}, PrepareSyntaxError
 		}
-		columns = append(columns, column)
+		if expression.Kind == ValueExpressionColumn {
+			columns = append(columns, expression.Column)
+			items = append(items, SelectItem{Header: expression.Column.Name, Expression: expression})
+			continue
+		}
+
+		items = append(items, SelectItem{Header: itemInput, Expression: expression})
 	}
 
-	return selectClause{Columns: columns, Where: where, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+	return selectClause{Columns: columns, Items: items, Where: where, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+}
+
+func selectItemsFromColumns(columns []Column) []SelectItem {
+	items := make([]SelectItem, 0, len(columns))
+	for _, column := range columns {
+		items = append(items, SelectItem{
+			Header: column.Name,
+			Expression: ValueExpression{
+				Kind:   ValueExpressionColumn,
+				Column: column,
+			},
+		})
+	}
+
+	return items
 }
 
 func findSelectFromIndex(body string) int {
@@ -689,6 +713,264 @@ func parseOrderByClause(input string, schema TableSchema) (OrderByClause, Prepar
 	}
 
 	return OrderByClause{Column: column, Direction: direction}, PrepareSuccess
+}
+
+func parseValueExpression(input string, schema TableSchema) (ValueExpression, PrepareResult) {
+	tokens, ok := parseValueExpressionTokens(input)
+	if !ok || len(tokens) == 0 {
+		return ValueExpression{}, PrepareSyntaxError
+	}
+
+	parser := valueExpressionParser{Tokens: tokens, Schema: schema}
+	expression, result := parser.parseAdditive()
+	if result != PrepareSuccess || parser.Position != len(tokens) {
+		return ValueExpression{}, PrepareSyntaxError
+	}
+	if expression.Kind == ValueExpressionBinary && !isNumericExpression(expression) {
+		return ValueExpression{}, PrepareSyntaxError
+	}
+
+	return expression, PrepareSuccess
+}
+
+func isNumericExpression(expression ValueExpression) bool {
+	switch expression.Kind {
+	case ValueExpressionColumn:
+		return expression.Column.Affinity == AffinityInteger || expression.Column.Affinity == AffinityReal
+	case ValueExpressionLiteral:
+		return isNumericValue(expression.Value)
+	case ValueExpressionBinary:
+		if expression.Left == nil || expression.Right == nil {
+			return false
+		}
+		return isNumericExpression(*expression.Left) && isNumericExpression(*expression.Right)
+	default:
+		return false
+	}
+}
+
+type valueExpressionParser struct {
+	Tokens   []insertField
+	Position int
+	Schema   TableSchema
+}
+
+func (parser *valueExpressionParser) parseAdditive() (ValueExpression, PrepareResult) {
+	left, result := parser.parseMultiplicative()
+	if result != PrepareSuccess {
+		return ValueExpression{}, result
+	}
+
+	for {
+		operator, ok := parser.matchArithmeticOperator("+", "-")
+		if !ok {
+			return left, PrepareSuccess
+		}
+		right, result := parser.parseMultiplicative()
+		if result != PrepareSuccess {
+			return ValueExpression{}, result
+		}
+		leftNode := left
+		rightNode := right
+		left = ValueExpression{
+			Kind:     ValueExpressionBinary,
+			Operator: operator,
+			Left:     &leftNode,
+			Right:    &rightNode,
+		}
+	}
+}
+
+func (parser *valueExpressionParser) parseMultiplicative() (ValueExpression, PrepareResult) {
+	left, result := parser.parsePrimary()
+	if result != PrepareSuccess {
+		return ValueExpression{}, result
+	}
+
+	for {
+		operator, ok := parser.matchArithmeticOperator("*", "/")
+		if !ok {
+			return left, PrepareSuccess
+		}
+		right, result := parser.parsePrimary()
+		if result != PrepareSuccess {
+			return ValueExpression{}, result
+		}
+		leftNode := left
+		rightNode := right
+		left = ValueExpression{
+			Kind:     ValueExpressionBinary,
+			Operator: operator,
+			Left:     &leftNode,
+			Right:    &rightNode,
+		}
+	}
+}
+
+func (parser *valueExpressionParser) parsePrimary() (ValueExpression, PrepareResult) {
+	if parser.matchValue("(") {
+		expression, result := parser.parseAdditive()
+		if result != PrepareSuccess || !parser.matchValue(")") {
+			return ValueExpression{}, PrepareSyntaxError
+		}
+		return expression, PrepareSuccess
+	}
+
+	token, ok := parser.consume()
+	if !ok || token.Quoted {
+		return ValueExpression{}, PrepareSyntaxError
+	}
+
+	if column, ok := parser.Schema.Column(token.Value); ok {
+		return ValueExpression{Kind: ValueExpressionColumn, Column: column}, PrepareSuccess
+	}
+	if value, ok := parseNumericLiteral(token.Value); ok {
+		return ValueExpression{Kind: ValueExpressionLiteral, Value: value}, PrepareSuccess
+	}
+
+	return ValueExpression{}, PrepareSyntaxError
+}
+
+func (parser *valueExpressionParser) consume() (insertField, bool) {
+	if parser.Position >= len(parser.Tokens) {
+		return insertField{}, false
+	}
+	token := parser.Tokens[parser.Position]
+	parser.Position++
+	return token, true
+}
+
+func (parser *valueExpressionParser) matchValue(value string) bool {
+	if parser.Position >= len(parser.Tokens) {
+		return false
+	}
+	token := parser.Tokens[parser.Position]
+	if token.Quoted || token.Value != value {
+		return false
+	}
+	parser.Position++
+	return true
+}
+
+func (parser *valueExpressionParser) matchArithmeticOperator(values ...string) (ArithmeticOperator, bool) {
+	if parser.Position >= len(parser.Tokens) {
+		return ArithmeticAdd, false
+	}
+	token := parser.Tokens[parser.Position]
+	if token.Quoted {
+		return ArithmeticAdd, false
+	}
+	for _, value := range values {
+		if token.Value != value {
+			continue
+		}
+		parser.Position++
+		switch value {
+		case "+":
+			return ArithmeticAdd, true
+		case "-":
+			return ArithmeticSubtract, true
+		case "*":
+			return ArithmeticMultiply, true
+		case "/":
+			return ArithmeticDivide, true
+		}
+	}
+
+	return ArithmeticAdd, false
+}
+
+func parseValueExpressionTokens(input string) ([]insertField, bool) {
+	tokens := []insertField{}
+	for i := 0; i < len(input); {
+		for i < len(input) && unicode.IsSpace(rune(input[i])) {
+			i++
+		}
+		if i >= len(input) {
+			break
+		}
+
+		switch input[i] {
+		case '(', ')', '+', '*', '/':
+			tokens = append(tokens, insertField{Value: input[i : i+1]})
+			i++
+			continue
+		case '-':
+			if isSignedNumericLiteralStart(input, i, tokens) {
+				start := i
+				i++
+				for i < len(input) && isNumericLiteralByte(input[i]) {
+					i++
+				}
+				tokens = append(tokens, insertField{Value: input[start:i]})
+				continue
+			}
+			tokens = append(tokens, insertField{Value: input[i : i+1]})
+			i++
+			continue
+		case '\'':
+			return nil, false
+		}
+
+		start := i
+		for i < len(input) && !unicode.IsSpace(rune(input[i])) && !isValueExpressionDelimiter(input[i]) {
+			if input[i] == '\'' {
+				return nil, false
+			}
+			i++
+		}
+		tokens = append(tokens, insertField{Value: input[start:i]})
+	}
+
+	return tokens, true
+}
+
+func isSignedNumericLiteralStart(input string, index int, tokens []insertField) bool {
+	if index+1 >= len(input) || !isDigit(input[index+1]) {
+		return false
+	}
+	if len(tokens) == 0 {
+		return true
+	}
+	previous := tokens[len(tokens)-1]
+	if previous.Quoted {
+		return false
+	}
+
+	switch previous.Value {
+	case "(", "+", "-", "*", "/":
+		return true
+	default:
+		return false
+	}
+}
+
+func isValueExpressionDelimiter(value byte) bool {
+	return value == '(' || value == ')' || value == '+' || value == '-' || value == '*' || value == '/'
+}
+
+func isNumericLiteralByte(value byte) bool {
+	return isDigit(value) || value == '.'
+}
+
+func isDigit(value byte) bool {
+	return value >= '0' && value <= '9'
+}
+
+func parseNumericLiteral(input string) (Value, bool) {
+	if strings.Contains(input, ".") {
+		real, err := strconv.ParseFloat(input, 64)
+		if err != nil {
+			return Value{}, false
+		}
+		return Value{StorageClass: StorageReal, Real: real}, true
+	}
+
+	integer, err := strconv.ParseInt(input, 10, 64)
+	if err != nil {
+		return Value{}, false
+	}
+	return Value{StorageClass: StorageInteger, Integer: integer}, true
 }
 
 func parseWhereExpression(input string, schema TableSchema) (WhereExpression, PrepareResult) {
@@ -1161,6 +1443,10 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	if len(columns) == 0 {
 		columns = table.Schema.Columns
 	}
+	items := statement.SelectItems
+	if len(items) == 0 {
+		items = selectItemsFromColumns(columns)
+	}
 	rows := selectRows(statement, table)
 	if statement.SelectOrderBy != nil {
 		sortRows(rows, *statement.SelectOrderBy)
@@ -1168,10 +1454,107 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	rows = limitRows(rows, statement.SelectLimit)
 
 	if len(rows) > 0 {
-		printRows(rows, columns, out)
+		printSelectRows(rows, items, out)
 	}
 
 	return ExecuteSuccess
+}
+
+func printSelectRows(rows []Row, items []SelectItem, out io.Writer) {
+	headers := make([]string, 0, len(items))
+	for _, item := range items {
+		headers = append(headers, item.Header)
+	}
+
+	valueRows := make([][]Value, 0, len(rows))
+	for _, row := range rows {
+		values := make([]Value, 0, len(items))
+		for _, item := range items {
+			value, ok := evaluateValueExpression(row, item.Expression)
+			if !ok {
+				value = Value{StorageClass: StorageNull}
+			}
+			values = append(values, value)
+		}
+		valueRows = append(valueRows, values)
+	}
+
+	printValueRows(headers, valueRows, out)
+}
+
+func evaluateValueExpression(row Row, expression ValueExpression) (Value, bool) {
+	switch expression.Kind {
+	case ValueExpressionColumn:
+		return rowValue(row, expression.Column), true
+	case ValueExpressionLiteral:
+		return expression.Value, true
+	case ValueExpressionBinary:
+		if expression.Left == nil || expression.Right == nil {
+			return Value{}, false
+		}
+		left, ok := evaluateValueExpression(row, *expression.Left)
+		if !ok {
+			return Value{}, false
+		}
+		right, ok := evaluateValueExpression(row, *expression.Right)
+		if !ok {
+			return Value{}, false
+		}
+		return evaluateArithmetic(left, right, expression.Operator)
+	default:
+		return Value{}, false
+	}
+}
+
+func evaluateArithmetic(left Value, right Value, operator ArithmeticOperator) (Value, bool) {
+	if left.StorageClass == StorageNull || right.StorageClass == StorageNull {
+		return Value{StorageClass: StorageNull}, true
+	}
+	if !isNumericValue(left) || !isNumericValue(right) {
+		return Value{}, false
+	}
+	if operator == ArithmeticDivide {
+		rightReal := numericValueAsReal(right)
+		if rightReal == 0 {
+			return Value{StorageClass: StorageNull}, true
+		}
+		return Value{StorageClass: StorageReal, Real: numericValueAsReal(left) / rightReal}, true
+	}
+	if left.StorageClass == StorageInteger && right.StorageClass == StorageInteger {
+		switch operator {
+		case ArithmeticAdd:
+			return Value{StorageClass: StorageInteger, Integer: left.Integer + right.Integer}, true
+		case ArithmeticSubtract:
+			return Value{StorageClass: StorageInteger, Integer: left.Integer - right.Integer}, true
+		case ArithmeticMultiply:
+			return Value{StorageClass: StorageInteger, Integer: left.Integer * right.Integer}, true
+		}
+	}
+
+	leftReal := numericValueAsReal(left)
+	rightReal := numericValueAsReal(right)
+	switch operator {
+	case ArithmeticAdd:
+		return Value{StorageClass: StorageReal, Real: leftReal + rightReal}, true
+	case ArithmeticSubtract:
+		return Value{StorageClass: StorageReal, Real: leftReal - rightReal}, true
+	case ArithmeticMultiply:
+		return Value{StorageClass: StorageReal, Real: leftReal * rightReal}, true
+	default:
+		return Value{}, false
+	}
+}
+
+func isNumericValue(value Value) bool {
+	return value.StorageClass == StorageInteger || value.StorageClass == StorageReal
+}
+
+func numericValueAsReal(value Value) float64 {
+	if value.StorageClass == StorageReal {
+		return value.Real
+	}
+
+	return float64(value.Integer)
 }
 
 func limitRows(rows []Row, limit *uint32) []Row {

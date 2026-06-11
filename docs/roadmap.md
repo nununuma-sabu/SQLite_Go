@@ -17,11 +17,12 @@
   - 完了: `where` の比較演算子、`and` / `or`、括弧条件を扱う。
   - 完了: `order by <column> asc|desc` を扱う。
   - 完了: `limit <count>` を扱う。
+  - 完了: SELECT句で数値型の四則演算を扱う。
   - 集約関数: `count(*)`、`count(column)`、`min`、`max`、`sum`、`avg` を扱う。
   - GROUP BY: `group by <column>` と集約関数を組み合わせる。
   - HAVING: GROUP BY後の集約結果を条件で絞り込む。
   - DISTINCT: 重複行を除外する。
-  - 式・別名: `select height + 1`、`select name as display_name` のような式と表示名を扱う。
+  - 式・別名: `select name as display_name` のような表示名を扱う。
   - 複数カラムORDER BY: `order by height desc, name asc` を扱う。
   - OFFSET: `limit` と組み合わせてページングできるようにする。
 - 更新処理: `update <id> ...` を追加し、既存レコードを書き換える。

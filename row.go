@@ -26,25 +26,42 @@ func printColumns(row Row, columns []Column, out io.Writer) {
 }
 
 func printRows(rows []Row, columns []Column, out io.Writer) {
-	widths := make([]int, len(columns))
-	for i, column := range columns {
-		widths[i] = len(column.Name)
+	valueRows := make([][]Value, 0, len(rows))
+	for _, row := range rows {
+		values := make([]Value, 0, len(columns))
+		for _, column := range columns {
+			values = append(values, rowValue(row, column))
+		}
+		valueRows = append(valueRows, values)
+	}
+
+	printValueRows(columnNames(columns), valueRows, out)
+}
+
+func printValueRows(headers []string, rows [][]Value, out io.Writer) {
+	if len(headers) == 0 {
+		return
+	}
+
+	widths := make([]int, len(headers))
+	for i, header := range headers {
+		widths[i] = len(header)
 	}
 	for _, row := range rows {
-		for i, column := range columns {
-			if width := len(formatRowValue(row, column)); width > widths[i] {
+		for i, value := range row {
+			if width := len(formatValue(value)); width > widths[i] {
 				widths[i] = width
 			}
 		}
 	}
 
 	printTableSeparator(widths, out)
-	printTableValues(columnNames(columns), widths, out)
+	printTableValues(headers, widths, out)
 	printTableSeparator(widths, out)
 	for _, row := range rows {
-		values := make([]string, 0, len(columns))
-		for _, column := range columns {
-			values = append(values, formatRowValue(row, column))
+		values := make([]string, 0, len(headers))
+		for _, value := range row {
+			values = append(values, formatValue(value))
 		}
 		printTableValues(values, widths, out)
 		printTableSeparator(widths, out)
@@ -293,19 +310,22 @@ func rowKey(row Row, schema TableSchema) (uint32, bool) {
 }
 
 func formatRowValue(row Row, column Column) string {
-	value := rowValue(row, column)
+	return formatValue(rowValue(row, column))
+}
+
+func formatValue(value Value) string {
 	if value.StorageClass == StorageNull {
 		return "NULL"
 	}
 
-	switch column.Affinity {
-	case AffinityInteger:
+	switch value.StorageClass {
+	case StorageInteger:
 		return strconv.FormatInt(value.Integer, 10)
-	case AffinityReal:
+	case StorageReal:
 		return strconv.FormatFloat(value.Real, 'f', -1, 64)
-	case AffinityText:
+	case StorageText:
 		return value.Text
-	case AffinityBlob:
+	case StorageBlob:
 		return fmt.Sprintf("BLOB(%d bytes)", len(value.Blob))
 	default:
 		return "NULL"

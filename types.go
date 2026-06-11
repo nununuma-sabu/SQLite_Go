@@ -9,11 +9,47 @@ type Statement struct {
 	ReplaceTable  bool
 	SelectByKey   *uint32
 	SelectColumns []Column
+	SelectItems   []SelectItem
 	SelectWhere   WhereExpression
 	SelectOrderBy *OrderByClause
 	SelectLimit   *uint32
 	Schema        TableSchema
 }
+
+// SelectItem はSELECT句に指定された表示対象を表す。
+type SelectItem struct {
+	Header     string
+	Expression ValueExpression
+}
+
+// ValueExpression はカラム参照、リテラル、数値演算式を表す。
+type ValueExpression struct {
+	Kind     ValueExpressionKind
+	Column   Column
+	Value    Value
+	Operator ArithmeticOperator
+	Left     *ValueExpression
+	Right    *ValueExpression
+}
+
+// ValueExpressionKind は値式の種類を表す。
+type ValueExpressionKind int
+
+const (
+	ValueExpressionColumn ValueExpressionKind = iota
+	ValueExpressionLiteral
+	ValueExpressionBinary
+)
+
+// ArithmeticOperator は数値式で使える演算子を表す。
+type ArithmeticOperator int
+
+const (
+	ArithmeticAdd ArithmeticOperator = iota
+	ArithmeticSubtract
+	ArithmeticMultiply
+	ArithmeticDivide
+)
 
 // OrderByClause はSELECTのORDER BY指定を表す。
 type OrderByClause struct {
