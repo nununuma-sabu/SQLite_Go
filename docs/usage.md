@@ -252,6 +252,7 @@ db >
 
 集約関数として `count(*)`、`count(column)`、`sum(column)`、`avg(column)`、`min(column)`、`max(column)` を使えます。
 `group by <column>` を指定すると、カラム値ごとに集約します。
+`having` を指定すると、GROUP BY後の集約結果を条件で絞り込めます。
 
 ```text
 db > create table sales (id integer primary key, region text, amount integer)
@@ -262,13 +263,11 @@ db > insert 2 East 20
 Executed.
 db > insert 3 West 7
 Executed.
-db > select region, count(*), sum(amount), avg(amount) from sales group by region;
+db > select region, count(*), sum(amount), avg(amount) from sales group by region having sum(amount) >= 10;
 +--------+----------+-------------+-------------+
 | region | count(*) | sum(amount) | avg(amount) |
 +--------+----------+-------------+-------------+
 | East   | 2        | 30          | 15          |
-+--------+----------+-------------+-------------+
-| West   | 1        | 7           | 7           |
 +--------+----------+-------------+-------------+
 Executed.
 db >

@@ -445,6 +445,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 			statement.SelectFromDual = selectClause.FromDual
 			statement.SelectWhere = selectClause.Where
 			statement.SelectGroupBy = selectClause.GroupBy
+			statement.SelectHaving = selectClause.Having
 			statement.SelectOrderBy = selectClause.OrderBy
 			statement.SelectLimit = selectClause.Limit
 			return PrepareSuccess
@@ -483,6 +484,7 @@ type selectClause struct {
 	FromDual bool
 	Where    WhereExpression
 	GroupBy  []Column
+	Having   HavingExpression
 	OrderBy  *OrderByClause
 	Limit    *uint32
 }
@@ -536,13 +538,25 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		}
 	}
 
-	groupByIndex := findSelectGroupByIndex(tableAndWhere)
-	tableAndWhereOnly := tableAndWhere
+	havingIndex := findSelectHavingIndex(tableAndWhere)
+	tableWhereAndGroup := tableAndWhere
+	havingInput := ""
+	var having HavingExpression
+	if havingIndex >= 0 {
+		tableWhereAndGroup = strings.TrimSpace(tableAndWhere[:havingIndex])
+		havingInput = strings.TrimSpace(tableAndWhere[havingIndex+len(" having "):])
+		if havingInput == "" {
+			return selectClause{}, PrepareSyntaxError
+		}
+	}
+
+	groupByIndex := findSelectGroupByIndex(tableWhereAndGroup)
+	tableAndWhereOnly := tableWhereAndGroup
 	groupByInput := ""
 	var groupBy []Column
 	if groupByIndex >= 0 {
-		tableAndWhereOnly = strings.TrimSpace(tableAndWhere[:groupByIndex])
-		groupByInput = strings.TrimSpace(tableAndWhere[groupByIndex+len(" group by "):])
+		tableAndWhereOnly = strings.TrimSpace(tableWhereAndGroup[:groupByIndex])
+		groupByInput = strings.TrimSpace(tableWhereAndGroup[groupByIndex+len(" group by "):])
 	}
 
 	whereIndex := findSelectWhereIndex(tableAndWhereOnly)
@@ -580,6 +594,13 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		}
 		groupBy = columns
 	}
+	if havingInput != "" {
+		expression, result := parseHavingExpression(havingInput, sourceSchema)
+		if result != PrepareSuccess {
+			return selectClause{}, result
+		}
+		having = expression
+	}
 	if orderByInput != "" {
 		clause, result := parseOrderByClause(orderByInput, sourceSchema)
 		if result != PrepareSuccess {
@@ -589,10 +610,10 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	}
 
 	if columnList == "*" {
-		if len(groupBy) > 0 {
+		if len(groupBy) > 0 || having.Kind != WhereExpressionNone {
 			return selectClause{}, PrepareSyntaxError
 		}
-		return selectClause{Columns: sourceSchema.Columns, Items: selectItemsFromColumns(sourceSchema.Columns), FromDual: fromDual, Where: where, GroupBy: groupBy, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+		return selectClause{Columns: sourceSchema.Columns, Items: selectItemsFromColumns(sourceSchema.Columns), FromDual: fromDual, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 	}
 
 	itemInputs, ok := splitSQLList(columnList)
@@ -621,8 +642,16 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	if !selectItemsAreValidForGrouping(items, groupBy) {
 		return selectClause{}, PrepareSyntaxError
 	}
+	if having.Kind != WhereExpressionNone {
+		if len(groupBy) == 0 && !selectItemsContainAggregate(items) {
+			return selectClause{}, PrepareSyntaxError
+		}
+		if !havingExpressionIsValidForGrouping(having, groupBy) {
+			return selectClause{}, PrepareSyntaxError
+		}
+	}
 
-	return selectClause{Columns: columns, Items: items, FromDual: fromDual, Where: where, GroupBy: groupBy, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+	return selectClause{Columns: columns, Items: items, FromDual: fromDual, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 }
 
 func DualTableSchema() TableSchema {
@@ -745,6 +774,26 @@ func findSelectGroupByIndex(body string) int {
 	return -1
 }
 
+func findSelectHavingIndex(body string) int {
+	lower := strings.ToLower(body)
+	inString := false
+	for i := 0; i <= len(lower)-len(" having "); i++ {
+		if body[i] == '\'' {
+			if inString && i+1 < len(body) && body[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if !inString && strings.HasPrefix(lower[i:], " having ") {
+			return i
+		}
+	}
+
+	return -1
+}
+
 func findSelectLimitIndex(body string) int {
 	lower := strings.ToLower(body)
 	inString := false
@@ -824,6 +873,267 @@ func parseOrderByClause(input string, schema TableSchema) (OrderByClause, Prepar
 	return OrderByClause{Column: column, Direction: direction}, PrepareSuccess
 }
 
+func parseHavingExpression(input string, schema TableSchema) (HavingExpression, PrepareResult) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return HavingExpression{}, PrepareSyntaxError
+	}
+	return parseHavingOr(input, schema)
+}
+
+func parseHavingOr(input string, schema TableSchema) (HavingExpression, PrepareResult) {
+	index := findTopLevelKeyword(input, "or")
+	if index >= 0 {
+		left, result := parseHavingOr(strings.TrimSpace(input[:index]), schema)
+		if result != PrepareSuccess {
+			return HavingExpression{}, result
+		}
+		right, result := parseHavingAnd(strings.TrimSpace(input[index+len(" or "):]), schema)
+		if result != PrepareSuccess {
+			return HavingExpression{}, result
+		}
+		leftNode := left
+		rightNode := right
+		return HavingExpression{Kind: WhereExpressionOr, Left: &leftNode, Right: &rightNode}, PrepareSuccess
+	}
+
+	return parseHavingAnd(input, schema)
+}
+
+func parseHavingAnd(input string, schema TableSchema) (HavingExpression, PrepareResult) {
+	index := findTopLevelKeyword(input, "and")
+	if index >= 0 {
+		left, result := parseHavingAnd(strings.TrimSpace(input[:index]), schema)
+		if result != PrepareSuccess {
+			return HavingExpression{}, result
+		}
+		right, result := parseHavingPrimary(strings.TrimSpace(input[index+len(" and "):]), schema)
+		if result != PrepareSuccess {
+			return HavingExpression{}, result
+		}
+		leftNode := left
+		rightNode := right
+		return HavingExpression{Kind: WhereExpressionAnd, Left: &leftNode, Right: &rightNode}, PrepareSuccess
+	}
+
+	return parseHavingPrimary(input, schema)
+}
+
+func parseHavingPrimary(input string, schema TableSchema) (HavingExpression, PrepareResult) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return HavingExpression{}, PrepareSyntaxError
+	}
+	if hasWrappingParentheses(input) {
+		return parseHavingOr(strings.TrimSpace(input[1:len(input)-1]), schema)
+	}
+
+	condition, result := parseHavingCondition(input, schema)
+	if result != PrepareSuccess {
+		return HavingExpression{}, result
+	}
+
+	return HavingExpression{Kind: WhereExpressionCondition, Condition: condition}, PrepareSuccess
+}
+
+func parseHavingCondition(input string, schema TableSchema) (HavingCondition, PrepareResult) {
+	if index, operator, ok := findTopLevelIsNullOperator(input); ok {
+		left, result := parseValueExpression(strings.TrimSpace(input[:index]), schema)
+		if result != PrepareSuccess {
+			return HavingCondition{}, result
+		}
+		return HavingCondition{Left: left, Operator: operator}, PrepareSuccess
+	}
+
+	index, operatorText, ok := findTopLevelComparisonOperator(input)
+	if !ok {
+		return HavingCondition{}, PrepareSyntaxError
+	}
+	left, result := parseValueExpression(strings.TrimSpace(input[:index]), schema)
+	if result != PrepareSuccess {
+		return HavingCondition{}, result
+	}
+	right, result := parseValueExpression(strings.TrimSpace(input[index+len(operatorText):]), schema)
+	if result != PrepareSuccess {
+		return HavingCondition{}, result
+	}
+	operator, ok := parseWhereComparisonOperator(operatorText)
+	if !ok {
+		return HavingCondition{}, PrepareSyntaxError
+	}
+
+	return HavingCondition{Left: left, Operator: operator, Right: right}, PrepareSuccess
+}
+
+func findTopLevelKeyword(input string, keyword string) int {
+	lower := strings.ToLower(input)
+	target := " " + strings.ToLower(keyword) + " "
+	inString := false
+	depth := 0
+	found := -1
+	for i := 0; i <= len(input)-len(target); i++ {
+		if input[i] == '\'' {
+			if inString && i+1 < len(input) && input[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		switch input[i] {
+		case '(':
+			depth++
+			continue
+		case ')':
+			depth--
+			if depth < 0 {
+				return -1
+			}
+			continue
+		}
+		if inString || depth != 0 {
+			continue
+		}
+		if strings.HasPrefix(lower[i:], target) {
+			found = i
+		}
+	}
+
+	return found
+}
+
+func findTopLevelIsNullOperator(input string) (int, WhereOperator, bool) {
+	index := findTopLevelSuffix(input, " is not null")
+	if index >= 0 {
+		return index, WhereIsNotNull, true
+	}
+	index = findTopLevelSuffix(input, " is null")
+	if index >= 0 {
+		return index, WhereIsNull, true
+	}
+
+	return 0, WhereEqual, false
+}
+
+func findTopLevelSuffix(input string, suffix string) int {
+	lower := strings.ToLower(input)
+	if !strings.HasSuffix(lower, suffix) {
+		return -1
+	}
+	index := len(input) - len(suffix)
+	if isTopLevelPosition(input, index) {
+		return index
+	}
+
+	return -1
+}
+
+func findTopLevelComparisonOperator(input string) (int, string, bool) {
+	inString := false
+	depth := 0
+	for i := 0; i < len(input); i++ {
+		if input[i] == '\'' {
+			if inString && i+1 < len(input) && input[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch input[i] {
+		case '(':
+			depth++
+			continue
+		case ')':
+			depth--
+			if depth < 0 {
+				return 0, "", false
+			}
+			continue
+		}
+		if depth != 0 {
+			continue
+		}
+		if i+1 < len(input) {
+			token := input[i : i+2]
+			switch token {
+			case "!=", "<>", "<=", ">=":
+				return i, token, true
+			}
+		}
+		switch input[i] {
+		case '=', '<', '>':
+			return i, input[i : i+1], true
+		}
+	}
+
+	return 0, "", false
+}
+
+func hasWrappingParentheses(input string) bool {
+	if len(input) < 2 || input[0] != '(' || input[len(input)-1] != ')' {
+		return false
+	}
+	inString := false
+	depth := 0
+	for i := 0; i < len(input); i++ {
+		if input[i] == '\'' {
+			if inString && i+1 < len(input) && input[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch input[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 && i != len(input)-1 {
+				return false
+			}
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+
+	return depth == 0 && !inString
+}
+
+func isTopLevelPosition(input string, targetIndex int) bool {
+	inString := false
+	depth := 0
+	for i := 0; i < targetIndex; i++ {
+		if input[i] == '\'' {
+			if inString && i+1 < targetIndex && input[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch input[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+	}
+
+	return !inString && depth == 0
+}
+
 func parseValueExpression(input string, schema TableSchema) (ValueExpression, PrepareResult) {
 	tokens, ok := parseValueExpressionTokens(input)
 	if !ok || len(tokens) == 0 {
@@ -886,6 +1196,54 @@ func columnInList(column Column, columns []Column) bool {
 	}
 
 	return false
+}
+
+func havingExpressionIsValidForGrouping(expression HavingExpression, groupBy []Column) bool {
+	switch expression.Kind {
+	case WhereExpressionNone:
+		return true
+	case WhereExpressionCondition:
+		return havingConditionIsValidForGrouping(expression.Condition, groupBy)
+	case WhereExpressionAnd, WhereExpressionOr:
+		return expression.Left != nil &&
+			expression.Right != nil &&
+			havingExpressionIsValidForGrouping(*expression.Left, groupBy) &&
+			havingExpressionIsValidForGrouping(*expression.Right, groupBy)
+	default:
+		return false
+	}
+}
+
+func havingConditionIsValidForGrouping(condition HavingCondition, groupBy []Column) bool {
+	if !valueExpressionIsValidForHaving(condition.Left, groupBy) {
+		return false
+	}
+	if condition.Operator == WhereIsNull || condition.Operator == WhereIsNotNull {
+		return true
+	}
+
+	return valueExpressionIsValidForHaving(condition.Right, groupBy)
+}
+
+func valueExpressionIsValidForHaving(expression ValueExpression, groupBy []Column) bool {
+	switch expression.Kind {
+	case ValueExpressionColumn:
+		return columnInList(expression.Column, groupBy)
+	case ValueExpressionLiteral:
+		return true
+	case ValueExpressionAggregate:
+		if expression.CountAll {
+			return true
+		}
+		return expression.Argument != nil && !expressionContainsAggregate(*expression.Argument)
+	case ValueExpressionBinary:
+		return expression.Left != nil &&
+			expression.Right != nil &&
+			valueExpressionIsValidForHaving(*expression.Left, groupBy) &&
+			valueExpressionIsValidForHaving(*expression.Right, groupBy)
+	default:
+		return false
+	}
 }
 
 func isNumericExpression(expression ValueExpression) bool {
@@ -981,8 +1339,11 @@ func (parser *valueExpressionParser) parsePrimary() (ValueExpression, PrepareRes
 	}
 
 	token, ok := parser.consume()
-	if !ok || token.Quoted {
+	if !ok {
 		return ValueExpression{}, PrepareSyntaxError
+	}
+	if token.Quoted {
+		return ValueExpression{Kind: ValueExpressionLiteral, Value: Value{StorageClass: StorageText, Text: token.Value}}, PrepareSuccess
 	}
 
 	if function, ok := parseAggregateFunctionName(token.Value); ok && parser.peekValue("(") {
@@ -1114,6 +1475,17 @@ func parseValueExpressionTokens(input string) ([]insertField, bool) {
 			tokens = append(tokens, insertField{Value: input[i : i+1]})
 			i++
 			continue
+		case '\'':
+			value, next, ok := parseSQLStringLiteral(input, i)
+			if !ok {
+				return nil, false
+			}
+			tokens = append(tokens, insertField{Value: value, Quoted: true})
+			i = next
+			if i < len(input) && !unicode.IsSpace(rune(input[i])) && !isValueExpressionDelimiter(input[i]) {
+				return nil, false
+			}
+			continue
 		case '-':
 			if isSignedNumericLiteralStart(input, i, tokens) {
 				start := i
@@ -1127,8 +1499,6 @@ func parseValueExpressionTokens(input string) ([]insertField, bool) {
 			tokens = append(tokens, insertField{Value: input[i : i+1]})
 			i++
 			continue
-		case '\'':
-			return nil, false
 		}
 
 		start := i
@@ -1555,6 +1925,9 @@ func violatesUniqueConstraint(row Row, table *Table) bool {
 }
 
 func valuesEqual(left Value, right Value) bool {
+	if isNumericValue(left) && isNumericValue(right) {
+		return numericValueAsReal(left) == numericValueAsReal(right)
+	}
 	if left.StorageClass != right.StorageClass {
 		return false
 	}
@@ -1576,6 +1949,18 @@ func valuesEqual(left Value, right Value) bool {
 }
 
 func compareValues(left Value, right Value) (int, bool) {
+	if isNumericValue(left) && isNumericValue(right) {
+		leftReal := numericValueAsReal(left)
+		rightReal := numericValueAsReal(right)
+		switch {
+		case leftReal < rightReal:
+			return -1, true
+		case leftReal > rightReal:
+			return 1, true
+		default:
+			return 0, true
+		}
+	}
 	if left.StorageClass != right.StorageClass {
 		return 0, false
 	}
@@ -1671,7 +2056,7 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 		sortRows(rows, *statement.SelectOrderBy)
 	}
 	if len(statement.SelectGroupBy) > 0 || selectItemsContainAggregate(items) {
-		valueRows := aggregateSelectRows(rows, items, statement.SelectGroupBy)
+		valueRows := aggregateSelectRows(rows, items, statement.SelectGroupBy, statement.SelectHaving)
 		valueRows = limitValueRows(valueRows, statement.SelectLimit)
 		if len(valueRows) > 0 {
 			printValueRows(selectItemHeaders(items), valueRows, out)
@@ -1706,10 +2091,13 @@ func selectItemHeaders(items []SelectItem) []string {
 	return headers
 }
 
-func aggregateSelectRows(rows []Row, items []SelectItem, groupBy []Column) [][]Value {
+func aggregateSelectRows(rows []Row, items []SelectItem, groupBy []Column, having HavingExpression) [][]Value {
 	groups := groupRows(rows, groupBy)
 	valueRows := make([][]Value, 0, len(groups))
 	for _, group := range groups {
+		if !groupMatchesHaving(group.Rows, group.Representative, having) {
+			continue
+		}
 		values := make([]Value, 0, len(items))
 		for _, item := range items {
 			value, ok := evaluateGroupedValueExpression(group.Rows, group.Representative, item.Expression)
@@ -1722,6 +2110,72 @@ func aggregateSelectRows(rows []Row, items []SelectItem, groupBy []Column) [][]V
 	}
 
 	return valueRows
+}
+
+func groupMatchesHaving(rows []Row, representative Row, expression HavingExpression) bool {
+	switch expression.Kind {
+	case WhereExpressionNone:
+		return true
+	case WhereExpressionCondition:
+		return groupMatchesHavingCondition(rows, representative, expression.Condition)
+	case WhereExpressionAnd:
+		if expression.Left == nil || expression.Right == nil {
+			return false
+		}
+		return groupMatchesHaving(rows, representative, *expression.Left) &&
+			groupMatchesHaving(rows, representative, *expression.Right)
+	case WhereExpressionOr:
+		if expression.Left == nil || expression.Right == nil {
+			return false
+		}
+		return groupMatchesHaving(rows, representative, *expression.Left) ||
+			groupMatchesHaving(rows, representative, *expression.Right)
+	default:
+		return false
+	}
+}
+
+func groupMatchesHavingCondition(rows []Row, representative Row, condition HavingCondition) bool {
+	left, ok := evaluateGroupedValueExpression(rows, representative, condition.Left)
+	if !ok {
+		return false
+	}
+
+	switch condition.Operator {
+	case WhereIsNull:
+		return left.StorageClass == StorageNull
+	case WhereIsNotNull:
+		return left.StorageClass != StorageNull
+	}
+
+	right, ok := evaluateGroupedValueExpression(rows, representative, condition.Right)
+	if !ok {
+		return false
+	}
+
+	switch condition.Operator {
+	case WhereEqual:
+		return valuesEqual(left, right)
+	case WhereNotEqual:
+		if left.StorageClass == StorageNull || right.StorageClass == StorageNull {
+			return false
+		}
+		return !valuesEqual(left, right)
+	case WhereLessThan:
+		comparison, ok := compareValues(left, right)
+		return ok && comparison < 0
+	case WhereLessThanOrEqual:
+		comparison, ok := compareValues(left, right)
+		return ok && comparison <= 0
+	case WhereGreaterThan:
+		comparison, ok := compareValues(left, right)
+		return ok && comparison > 0
+	case WhereGreaterThanOrEqual:
+		comparison, ok := compareValues(left, right)
+		return ok && comparison >= 0
+	default:
+		return false
+	}
 }
 
 type rowGroup struct {

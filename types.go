@@ -13,6 +13,7 @@ type Statement struct {
 	SelectFromDual bool
 	SelectWhere    WhereExpression
 	SelectGroupBy  []Column
+	SelectHaving   HavingExpression
 	SelectOrderBy  *OrderByClause
 	SelectLimit    *uint32
 	Schema         TableSchema
@@ -95,6 +96,21 @@ type WhereCondition struct {
 	Column   Column
 	Operator WhereOperator
 	Value    Value
+}
+
+// HavingExpression はHAVING条件式を表す。
+type HavingExpression struct {
+	Kind      WhereExpressionKind
+	Condition HavingCondition
+	Left      *HavingExpression
+	Right     *HavingExpression
+}
+
+// HavingCondition は集約後の単一HAVING条件を表す。
+type HavingCondition struct {
+	Left     ValueExpression
+	Operator WhereOperator
+	Right    ValueExpression
 }
 
 // WhereExpressionKind はWHERE条件式の種類を表す。

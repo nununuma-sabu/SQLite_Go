@@ -777,6 +777,87 @@ func TestRunExecutesGroupByAggregates(t *testing.T) {
 	}
 }
 
+func TestRunExecutesGroupByHaving(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table sales (id integer primary key, region text, amount integer, score real)",
+		"insert 1 East 10 1.5",
+		"insert 2 East 20 2.5",
+		"insert 3 West 7 null",
+		"insert 4 North 40 4",
+		"SELECT region, count(*), sum(amount), avg(score) FROM sales GROUP BY region HAVING count(*) > 1 OR sum(amount) >= 40;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"region", "count(*)", "sum(amount)", "avg(score)"},
+		[]string{"East", "2", "30", "2"},
+		[]string{"North", "1", "40", "4"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesHavingWithoutGroupBy(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table sales (id integer primary key, amount integer)",
+		"insert 1 10",
+		"insert 2 20",
+		"SELECT count(*), sum(amount) FROM sales HAVING sum(amount) > 20 AND avg(amount) = 15;",
+		"SELECT count(*) FROM sales HAVING sum(amount) < 20;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"count(*)", "sum(amount)"},
+		[]string{"2", "30"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesHavingIsNull(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table sales (id integer primary key, region text, score real)",
+		"insert 1 East 1.5",
+		"insert 2 West null",
+		"SELECT region, avg(score) FROM sales GROUP BY region HAVING avg(score) IS NULL;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"region", "avg(score)"},
+		[]string{"West", "NULL"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesAggregateOnEmptyTable(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table sales (id integer primary key, amount integer)",
@@ -805,11 +886,15 @@ func TestRunPrintsSyntaxErrorForInvalidAggregateSelect(t *testing.T) {
 		"SELECT region, count(*) FROM sales GROUP BY missing;",
 		"SELECT sum(region) FROM sales;",
 		"SELECT count(*) + region FROM sales GROUP BY region;",
+		"SELECT count(*) FROM sales HAVING region = 'East';",
+		"SELECT * FROM sales HAVING count(*) > 0;",
 		".exit",
 	})
 
 	want := strings.Join([]string{
 		"db > Executed.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
