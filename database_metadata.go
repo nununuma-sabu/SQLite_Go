@@ -16,7 +16,8 @@ const (
 )
 
 type databaseMetadata struct {
-	Schema TableSchema `json:"schema"`
+	Schema TableSchema       `json:"schema,omitempty"`
+	Tables []TableDefinition `json:"tables,omitempty"`
 }
 
 func isMetadataPage(page []byte) bool {
@@ -37,22 +38,50 @@ func readDatabaseMetadata(page []byte) (databaseMetadata, error) {
 	if err := json.Unmarshal(page[metadataPayloadOffset:metadataPayloadOffset+int(payloadLength)], &metadata); err != nil {
 		return databaseMetadata{}, err
 	}
-	if !metadata.Schema.IsUsable() {
-		return databaseMetadata{}, fmt.Errorf("metadata schema is invalid")
+	if len(metadata.Tables) == 0 {
+		if !metadata.Schema.IsUsable() {
+			return databaseMetadata{}, fmt.Errorf("metadata schema is invalid")
+		}
+		if metadata.Schema.SerializedRowSize() > leafNodeMaxPayloadSize {
+			return databaseMetadata{}, fmt.Errorf("metadata schema row is too large")
+		}
+		metadata.Tables = []TableDefinition{{Schema: metadata.Schema, RootPageNum: defaultRootPageNum}}
 	}
-	if metadata.Schema.SerializedRowSize() > leafNodeMaxPayloadSize {
-		return databaseMetadata{}, fmt.Errorf("metadata schema row is too large")
+	for _, definition := range metadata.Tables {
+		if !definition.Schema.IsUsable() {
+			return databaseMetadata{}, fmt.Errorf("metadata schema is invalid")
+		}
+		if definition.RootPageNum == metadataPageNum {
+			return databaseMetadata{}, fmt.Errorf("metadata root page is invalid")
+		}
+		if definition.Schema.SerializedRowSize() > leafNodeMaxPayloadSize {
+			return databaseMetadata{}, fmt.Errorf("metadata schema row is too large")
+		}
 	}
 
 	return metadata, nil
 }
 
 func writeDatabaseMetadata(page []byte, metadata databaseMetadata) error {
-	if !metadata.Schema.IsUsable() {
-		return fmt.Errorf("metadata schema is invalid")
+	if len(metadata.Tables) == 0 {
+		if !metadata.Schema.IsUsable() {
+			return fmt.Errorf("metadata schema is invalid")
+		}
+		if metadata.Schema.SerializedRowSize() > leafNodeMaxPayloadSize {
+			return fmt.Errorf("metadata schema row is too large")
+		}
+		metadata.Tables = []TableDefinition{{Schema: metadata.Schema, RootPageNum: defaultRootPageNum}}
 	}
-	if metadata.Schema.SerializedRowSize() > leafNodeMaxPayloadSize {
-		return fmt.Errorf("metadata schema row is too large")
+	for _, definition := range metadata.Tables {
+		if !definition.Schema.IsUsable() {
+			return fmt.Errorf("metadata schema is invalid")
+		}
+		if definition.RootPageNum == metadataPageNum {
+			return fmt.Errorf("metadata root page is invalid")
+		}
+		if definition.Schema.SerializedRowSize() > leafNodeMaxPayloadSize {
+			return fmt.Errorf("metadata schema row is too large")
+		}
 	}
 
 	payload, err := json.Marshal(metadata)

@@ -71,6 +71,7 @@ db >
 ## INSERT
 
 `insert` は、現在のスキーマのカラム順に値を受け取ります。
+複数テーブルを作成している場合は、`insert into <table> values ...` で対象テーブルを指定できます。
 
 デフォルトスキーマ:
 
@@ -80,6 +81,12 @@ create table users (id INTEGER, username TEXT, email TEXT)
 
 ```text
 db > insert 1 alice alice@example.com
+Executed.
+db >
+```
+
+```text
+db > insert into people values 1 Alice 10
 Executed.
 db >
 ```
@@ -192,17 +199,16 @@ Executed.
 db >
 ```
 
-`JOIN ... ON ...` で、同じ保存テーブルを複数の別名で参照する自己結合ができます。
-現在のDBは単一テーブル構成のため、結合対象は同じテーブル名に限ります。
+複数の実テーブルを作成し、`JOIN ... ON ...` で結合できます。
 
 ```text
-db > select a.name as shorter, b.name as taller
-   > from people a join people b on a.height < b.height;
-+---------+--------+
-| shorter | taller |
-+---------+--------+
-| Alice   | Bob    |
-+---------+--------+
+db > select p.name as person, d.name as department
+   > from people p join departments d on p.department_id = d.id;
++--------+-------------+
+| person | department  |
++--------+-------------+
+| Alice  | Engineering |
++--------+-------------+
 Executed.
 db >
 ```

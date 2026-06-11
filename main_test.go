@@ -1167,6 +1167,70 @@ func TestRunExecutesInnerJoinWithGroupBy(t *testing.T) {
 	}
 }
 
+func TestRunManagesMultipleTablesAndJoinsThem(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, department_id integer)",
+		"create table departments (id integer primary key, name text)",
+		"insert into people values 1 Alice 10",
+		"insert into people values 2 Bob 20",
+		"insert into departments values 10 Engineering",
+		"insert into departments values 20 Sales",
+		"SELECT p.name AS person, d.name AS department FROM people p JOIN departments d ON p.department_id = d.id ORDER BY p.id ASC;",
+		".schema",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"person", "department"},
+		[]string{"Alice", "Engineering"},
+		[]string{"Bob", "Sales"},
+	)...)
+	wantLines = append(wantLines,
+		"Executed.",
+		"db > create table departments (id integer primary key, name text)",
+		"create table people (id integer primary key, name text, department_id integer)",
+		"db > ",
+	)
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPersistsMultipleTables(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	runScript(t, dbPath, []string{
+		"create table people (id integer primary key, name text, department_id integer)",
+		"create table departments (id integer primary key, name text)",
+		"insert into people values 1 Alice 10",
+		"insert into departments values 10 Engineering",
+		".exit",
+	})
+
+	got := runScript(t, dbPath, []string{
+		"SELECT p.name, d.name FROM people p JOIN departments d ON p.department_id = d.id;",
+		".exit",
+	})
+
+	wantLines := expectedTableLines("db > ",
+		[]string{"p.name", "d.name"},
+		[]string{"Alice", "Engineering"},
+	)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunPrintsSyntaxErrorForInvalidJoin(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table people (id integer primary key, name text)",

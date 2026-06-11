@@ -5,6 +5,7 @@ import "os"
 // Statement はパース済みの命令を表す。
 type Statement struct {
 	Type           StatementType
+	TargetTable    string
 	RowToInsert    Row
 	ReplaceTable   bool
 	SelectByKey    *uint32
@@ -12,6 +13,7 @@ type Statement struct {
 	SelectItems    []SelectItem
 	SelectDistinct bool
 	SelectFromDual bool
+	SelectSource   TableReference
 	SelectJoin     *JoinClause
 	SelectWhere    WhereExpression
 	SelectGroupBy  []Column
@@ -23,8 +25,10 @@ type Statement struct {
 
 // TableReference はFROM句に現れるテーブル参照を表す。
 type TableReference struct {
-	Name  string
-	Alias string
+	Name        string
+	Alias       string
+	Schema      TableSchema
+	RootPageNum uint32
 }
 
 // JoinClause はINNER JOINの対象とON条件を表す。
@@ -172,6 +176,13 @@ type Table struct {
 	RootPageNum uint32
 	Schema      TableSchema
 	HasMetadata bool
+	Tables      map[string]TableDefinition
+}
+
+// TableDefinition はDB内の1テーブル分のメタデータを表す。
+type TableDefinition struct {
+	Schema      TableSchema `json:"schema"`
+	RootPageNum uint32      `json:"root_page_num"`
 }
 
 // Cursor はテーブル内の現在位置を表す。

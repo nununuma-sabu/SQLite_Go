@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 const (
 	defaultTableName     = "users"
@@ -133,6 +136,55 @@ func DefaultTableSchema() TableSchema {
 				MaxLength:    columnEmailSize,
 			},
 		},
+	}
+}
+
+func normalizeTableName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func metadataTables(metadata databaseMetadata) map[string]TableDefinition {
+	tables := make(map[string]TableDefinition, len(metadata.Tables))
+	for _, definition := range metadata.Tables {
+		tables[normalizeTableName(definition.Schema.Name)] = definition
+	}
+
+	return tables
+}
+
+func tableDefinitions(table *Table) []TableDefinition {
+	definitions := make([]TableDefinition, 0, len(table.Tables))
+	for _, definition := range table.Tables {
+		definitions = append(definitions, definition)
+	}
+	sort.Slice(definitions, func(i, j int) bool {
+		return strings.ToLower(definitions[i].Schema.Name) < strings.ToLower(definitions[j].Schema.Name)
+	})
+
+	return definitions
+}
+
+func tableDefinition(table *Table, name string) (TableDefinition, bool) {
+	definition, ok := table.Tables[normalizeTableName(name)]
+	return definition, ok
+}
+
+func setTableDefinition(table *Table, definition TableDefinition) {
+	if table.Tables == nil {
+		table.Tables = map[string]TableDefinition{}
+	}
+	table.Tables[normalizeTableName(definition.Schema.Name)] = definition
+	table.Schema = definition.Schema
+	table.RootPageNum = definition.RootPageNum
+}
+
+func tableView(table *Table, definition TableDefinition) *Table {
+	return &Table{
+		Pager:       table.Pager,
+		RootPageNum: definition.RootPageNum,
+		Schema:      definition.Schema,
+		HasMetadata: table.HasMetadata,
+		Tables:      table.Tables,
 	}
 }
 

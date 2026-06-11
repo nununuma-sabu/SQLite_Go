@@ -21,7 +21,9 @@ func doMetaCommand(input string, table *Table, out io.Writer) MetaCommandResult 
 		return MetaCommandSuccess
 	}
 	if input == ".schema" {
-		fmt.Fprintln(out, table.Schema.CreateStatement())
+		for _, definition := range tableDefinitions(table) {
+			fmt.Fprintln(out, definition.Schema.CreateStatement())
+		}
 		return MetaCommandSuccess
 	}
 

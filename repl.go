@@ -100,7 +100,7 @@ func runInput(input string, table *Table, out io.Writer) (bool, ExitCode) {
 	}
 
 	var statement Statement
-	switch prepareStatement(input, &statement, table.Schema) {
+	switch prepareStatement(input, &statement, table) {
 	case PrepareSuccess:
 	case PrepareNegativeID:
 		fmt.Fprintln(out, "Primary key must be positive.")

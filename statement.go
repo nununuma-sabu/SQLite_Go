@@ -26,23 +26,50 @@ func prepareCreateTable(input string, statement *Statement) PrepareResult {
 }
 
 // insert入力をRow付きのステートメントへ変換する。
-func prepareInsert(input string, statement *Statement, schema TableSchema) PrepareResult {
+func prepareInsert(input string, statement *Statement, table *Table) PrepareResult {
 	statement.Type = StatementInsert
 
 	fields, ok := parseInsertFields(input)
 	if !ok {
 		return PrepareSyntaxError
 	}
+	targetTable := table.Schema.Name
+	valueOffset := 1
+	if len(fields) >= 4 &&
+		!fields[1].Quoted &&
+		!fields[2].Quoted &&
+		strings.EqualFold(fields[1].Value, "into") {
+		targetTable = fields[2].Value
+		valueOffset = 3
+		if !strings.EqualFold(fields[valueOffset].Value, "values") {
+			return PrepareSyntaxError
+		}
+		valueOffset++
+	}
+	definition, ok := tableDefinition(table, targetTable)
+	if !ok {
+		return PrepareSyntaxError
+	}
+	schema := definition.Schema
 	if len(fields) != len(schema.Columns)+1 {
+		if valueOffset != 1 && len(fields)-valueOffset != len(schema.Columns) {
+			return PrepareSyntaxError
+		}
+		if valueOffset == 1 {
+			return PrepareSyntaxError
+		}
+	}
+	if valueOffset == 1 && len(fields) != len(schema.Columns)+1 {
 		return PrepareSyntaxError
 	}
 
+	statement.TargetTable = schema.Name
 	statement.RowToInsert = Row{
 		Values: make(map[string]Value, len(schema.Columns)),
 	}
 
 	for i, column := range schema.Columns {
-		value, result := parseColumnValue(fields[i+1], column)
+		value, result := parseColumnValue(fields[i+valueOffset], column)
 		if result != PrepareSuccess {
 			return result
 		}
@@ -421,7 +448,9 @@ func isConflictResolution(token string) bool {
 }
 
 // 入力文字列を実行可能なステートメントへ変換する。
-func prepareStatement(input string, statement *Statement, schema TableSchema) PrepareResult {
+func prepareStatement(input string, statement *Statement, source any) PrepareResult {
+	table := statementTable(source)
+	schema := table.Schema
 	input = strings.TrimSpace(input)
 
 	lowerInput := strings.ToLower(input)
@@ -430,13 +459,13 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 	}
 
 	if strings.HasPrefix(input, "insert") {
-		return prepareInsert(input, statement, schema)
+		return prepareInsert(input, statement, table)
 	}
 
 	if strings.HasPrefix(strings.ToLower(input), "select") {
 		statement.Type = StatementSelect
 		if strings.Contains(strings.ToLower(input), " from ") {
-			selectClause, result := parseSelectStatement(input, schema)
+			selectClause, result := parseSelectStatement(input, table)
 			if result != PrepareSuccess {
 				return result
 			}
@@ -444,6 +473,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 			statement.SelectItems = selectClause.Items
 			statement.SelectDistinct = selectClause.Distinct
 			statement.SelectFromDual = selectClause.FromDual
+			statement.SelectSource = selectClause.Source
 			statement.SelectJoin = selectClause.Join
 			statement.SelectWhere = selectClause.Where
 			statement.SelectGroupBy = selectClause.GroupBy
@@ -480,11 +510,32 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 	return PrepareUnrecognizedStatement
 }
 
+func statementTable(source any) *Table {
+	switch value := source.(type) {
+	case *Table:
+		if value.Tables == nil {
+			setTableDefinition(value, TableDefinition{Schema: value.Schema, RootPageNum: value.RootPageNum})
+		}
+		return value
+	case TableSchema:
+		return &Table{
+			RootPageNum: defaultRootPageNum,
+			Schema:      value,
+			Tables: map[string]TableDefinition{
+				normalizeTableName(value.Name): {Schema: value, RootPageNum: defaultRootPageNum},
+			},
+		}
+	default:
+		panic("unsupported prepare source")
+	}
+}
+
 type selectClause struct {
 	Columns  []Column
 	Items    []SelectItem
 	Distinct bool
 	FromDual bool
+	Source   TableReference
 	Join     *JoinClause
 	Where    WhereExpression
 	GroupBy  []Column
@@ -537,7 +588,7 @@ func (resolver columnResolver) Column(name string) (Column, bool) {
 }
 
 func (resolver columnResolver) resolvedColumn(reference TableReference, columnName string) (Column, bool) {
-	column, ok := resolver.Schema.Column(columnName)
+	column, ok := reference.Schema.Column(columnName)
 	if !ok {
 		return Column{}, false
 	}
@@ -579,7 +630,7 @@ func splitQualifiedName(name string) (string, string, bool) {
 	return qualifier, columnName, true
 }
 
-func parseSelectStatement(input string, schema TableSchema) (selectClause, PrepareResult) {
+func parseSelectStatement(input string, table *Table) (selectClause, PrepareResult) {
 	trimmed := strings.TrimSpace(input)
 	trimmed = strings.TrimSuffix(trimmed, ";")
 	trimmed = strings.TrimSpace(trimmed)
@@ -660,7 +711,7 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		}
 	}
 
-	fromSource, result := parseFromSource(tableReference, schema)
+	fromSource, result := parseFromSource(tableReference, table)
 	if result != PrepareSuccess {
 		return selectClause{}, result
 	}
@@ -704,7 +755,7 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		if fromSource.Join != nil || len(groupBy) > 0 || having.Kind != WhereExpressionNone {
 			return selectClause{}, PrepareSyntaxError
 		}
-		return selectClause{Columns: sourceSchema.Columns, Items: selectItemsFromColumns(sourceSchema.Columns), Distinct: distinct, FromDual: fromDual, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+		return selectClause{Columns: sourceSchema.Columns, Items: selectItemsFromColumns(sourceSchema.Columns), Distinct: distinct, FromDual: fromDual, Source: fromSource.Source, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 	}
 
 	itemInputs, ok := splitSQLList(columnList)
@@ -749,19 +800,20 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		}
 	}
 
-	return selectClause{Columns: columns, Items: items, Distinct: distinct, FromDual: fromDual, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+	return selectClause{Columns: columns, Items: items, Distinct: distinct, FromDual: fromDual, Source: fromSource.Source, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 }
 
 type fromSource struct {
 	Schema   TableSchema
 	FromDual bool
+	Source   TableReference
 	Join     *JoinClause
 	Resolver columnResolver
 }
 
-func parseFromSource(input string, schema TableSchema) (fromSource, PrepareResult) {
+func parseFromSource(input string, table *Table) (fromSource, PrepareResult) {
 	if joinIndex := findSelectJoinIndex(input); joinIndex >= 0 {
-		return parseJoinSource(input, joinIndex, schema)
+		return parseJoinSource(input, joinIndex, table)
 	}
 
 	reference, ok := parseTableReference(input)
@@ -769,22 +821,32 @@ func parseFromSource(input string, schema TableSchema) (fromSource, PrepareResul
 		return fromSource{}, PrepareSyntaxError
 	}
 	fromDual := strings.EqualFold(reference.Name, dualTableName)
-	sourceSchema := schema
+	sourceSchema := table.Schema
 	if fromDual {
 		sourceSchema = DualTableSchema()
+		reference.Schema = sourceSchema
+	} else {
+		definition, ok := tableDefinition(table, reference.Name)
+		if !ok {
+			return fromSource{}, PrepareSyntaxError
+		}
+		sourceSchema = definition.Schema
+		reference.Schema = definition.Schema
+		reference.RootPageNum = definition.RootPageNum
 	}
-	if !fromDual && !strings.EqualFold(reference.Name, schema.Name) {
+	if !fromDual && reference.RootPageNum == metadataPageNum {
 		return fromSource{}, PrepareSyntaxError
 	}
 
 	return fromSource{
 		Schema:   sourceSchema,
 		FromDual: fromDual,
+		Source:   reference,
 		Resolver: newColumnResolver(sourceSchema, []TableReference{reference}, false),
 	}, PrepareSuccess
 }
 
-func parseJoinSource(input string, joinIndex int, schema TableSchema) (fromSource, PrepareResult) {
+func parseJoinSource(input string, joinIndex int, table *Table) (fromSource, PrepareResult) {
 	leftInput := strings.TrimSpace(input[:joinIndex])
 	if strings.HasSuffix(strings.ToLower(leftInput), " inner") {
 		leftInput = strings.TrimSpace(leftInput[:len(leftInput)-len(" inner")])
@@ -808,14 +870,23 @@ func parseJoinSource(input string, joinIndex int, schema TableSchema) (fromSourc
 	if !ok {
 		return fromSource{}, PrepareSyntaxError
 	}
-	if !strings.EqualFold(leftReference.Name, schema.Name) || !strings.EqualFold(rightReference.Name, schema.Name) {
+	leftDefinition, ok := tableDefinition(table, leftReference.Name)
+	if !ok {
 		return fromSource{}, PrepareSyntaxError
 	}
+	rightDefinition, ok := tableDefinition(table, rightReference.Name)
+	if !ok {
+		return fromSource{}, PrepareSyntaxError
+	}
+	leftReference.Schema = leftDefinition.Schema
+	leftReference.RootPageNum = leftDefinition.RootPageNum
+	rightReference.Schema = rightDefinition.Schema
+	rightReference.RootPageNum = rightDefinition.RootPageNum
 	if strings.EqualFold(referenceQualifier(leftReference), referenceQualifier(rightReference)) {
 		return fromSource{}, PrepareSyntaxError
 	}
 
-	resolver := newColumnResolver(schema, []TableReference{leftReference, rightReference}, true)
+	resolver := newColumnResolver(table.Schema, []TableReference{leftReference, rightReference}, true)
 	onExpression, result := parseHavingExpression(onInput, resolver)
 	if result != PrepareSuccess || havingExpressionContainsAggregate(onExpression) {
 		return fromSource{}, PrepareSyntaxError
@@ -823,7 +894,7 @@ func parseJoinSource(input string, joinIndex int, schema TableSchema) (fromSourc
 	join := &JoinClause{Left: leftReference, Right: rightReference, On: onExpression}
 
 	return fromSource{
-		Schema:   schema,
+		Schema:   leftDefinition.Schema,
 		FromDual: false,
 		Join:     join,
 		Resolver: resolver,
@@ -2253,12 +2324,20 @@ func parseColumnValue(field insertField, column Column) (Value, PrepareResult) {
 
 // insertステートメントを実行し、B-Tree内の適切な位置へ行を追加する。
 func executeInsert(statement *Statement, table *Table) ExecuteResult {
-	keyToInsert, ok := rowKey(statement.RowToInsert, table.Schema)
+	if statement.TargetTable == "" {
+		statement.TargetTable = table.Schema.Name
+	}
+	definition, ok := tableDefinition(table, statement.TargetTable)
 	if !ok {
 		return ExecuteConstraintViolation
 	}
-	cursor := tableFind(table, keyToInsert)
-	leafNode := getPage(table.Pager, cursor.PageNum)
+	target := tableView(table, definition)
+	keyToInsert, ok := rowKey(statement.RowToInsert, target.Schema)
+	if !ok {
+		return ExecuteConstraintViolation
+	}
+	cursor := tableFind(target, keyToInsert)
+	leafNode := getPage(target.Pager, cursor.PageNum)
 	numCells := leafNodeNumCells(leafNode)
 	if cursor.CellNum < numCells {
 		keyAtIndex := leafNodeKey(leafNode, cursor.CellNum)
@@ -2266,7 +2345,7 @@ func executeInsert(statement *Statement, table *Table) ExecuteResult {
 			return ExecuteDuplicateKey
 		}
 	}
-	if violatesUniqueConstraint(statement.RowToInsert, table) {
+	if violatesUniqueConstraint(statement.RowToInsert, target) {
 		return ExecuteConstraintViolation
 	}
 
@@ -2366,40 +2445,84 @@ func compareValues(left Value, right Value) (int, bool) {
 }
 
 func executeCreateTable(statement *Statement, table *Table) ExecuteResult {
+	existing, exists := tableDefinition(table, statement.Schema.Name)
 	if statement.ReplaceTable {
-		replaceTable(statement, table)
+		replaceTable(statement, table, existing, exists)
 		return ExecuteSuccess
 	}
 
-	if !tableIsEmpty(table) {
+	if exists {
+		return ExecuteTableNotEmpty
+	}
+	if shouldReplaceDefaultTable(table) {
+		delete(table.Tables, normalizeTableName(defaultTableName))
+		setTableDefinition(table, TableDefinition{Schema: statement.Schema, RootPageNum: defaultRootPageNum})
+		rootNode := getPage(table.Pager, defaultRootPageNum)
+		clear(rootNode)
+		initializeLeafNode(rootNode)
+		setNodeRoot(rootNode, true)
+		return ExecuteSuccess
+	}
+	if shouldRejectCreateBecauseDefaultHasRows(table) {
 		return ExecuteTableNotEmpty
 	}
 
-	table.Schema = statement.Schema
+	rootPageNum := getUnusedPageNum(table.Pager)
+	rootNode := getPage(table.Pager, rootPageNum)
+	initializeLeafNode(rootNode)
+	setNodeRoot(rootNode, true)
+	setTableDefinition(table, TableDefinition{Schema: statement.Schema, RootPageNum: rootPageNum})
 	return ExecuteSuccess
 }
 
-func replaceTable(statement *Statement, table *Table) {
-	table.Schema = statement.Schema
-	table.RootPageNum = defaultRootPageNum
+func shouldReplaceDefaultTable(table *Table) bool {
+	if len(table.Tables) != 1 {
+		return false
+	}
+	defaultDefinition, ok := tableDefinition(table, defaultTableName)
+	if !ok {
+		return false
+	}
+	defaultTable := tableView(table, defaultDefinition)
+	return tableIsEmpty(defaultTable)
+}
+
+func shouldRejectCreateBecauseDefaultHasRows(table *Table) bool {
+	if len(table.Tables) != 1 {
+		return false
+	}
+	defaultDefinition, ok := tableDefinition(table, defaultTableName)
+	if !ok {
+		return false
+	}
+	defaultTable := tableView(table, defaultDefinition)
+	return !tableIsEmpty(defaultTable)
+}
+
+func replaceTable(statement *Statement, table *Table, existing TableDefinition, exists bool) {
+	rootPageNum := existing.RootPageNum
+	if !exists {
+		if len(table.Tables) == 1 {
+			if defaultDefinition, ok := tableDefinition(table, defaultTableName); ok {
+				delete(table.Tables, normalizeTableName(defaultTableName))
+				rootPageNum = defaultDefinition.RootPageNum
+			} else {
+				rootPageNum = getUnusedPageNum(table.Pager)
+			}
+		} else {
+			rootPageNum = getUnusedPageNum(table.Pager)
+		}
+	}
 	table.HasMetadata = true
+	setTableDefinition(table, TableDefinition{Schema: statement.Schema, RootPageNum: rootPageNum})
 
 	pager := table.Pager
-	for i := uint32(defaultRootPageNum + 1); i < pager.NumPages; i++ {
-		pager.Pages[i] = nil
-	}
-	pager.NumPages = defaultRootPageNum + 1
-	pager.FileLength = int64(pager.NumPages) * pageSize
-	if err := pager.File.Truncate(pager.FileLength); err != nil {
-		panic(err)
-	}
-
 	metadataPage := getPage(pager, metadataPageNum)
-	if err := writeDatabaseMetadata(metadataPage, databaseMetadata{Schema: table.Schema}); err != nil {
+	if err := writeDatabaseMetadata(metadataPage, databaseMetadata{Tables: tableDefinitions(table)}); err != nil {
 		panic(err)
 	}
 
-	rootNode := getPage(pager, table.RootPageNum)
+	rootNode := getPage(pager, rootPageNum)
 	clear(rootNode)
 	initializeLeafNode(rootNode)
 	setNodeRoot(rootNode, true)
@@ -2897,6 +3020,9 @@ func selectRows(statement *Statement, table *Table) []Row {
 	if statement.SelectJoin != nil {
 		return selectJoinedRows(statement, table)
 	}
+	if statement.SelectSource.Name != "" && !strings.EqualFold(statement.SelectSource.Name, dualTableName) {
+		table = tableView(table, TableDefinition{Schema: statement.SelectSource.Schema, RootPageNum: statement.SelectSource.RootPageNum})
+	}
 
 	if statement.SelectByKey != nil {
 		cursor := tableFind(table, *statement.SelectByKey)
@@ -2924,11 +3050,12 @@ func selectRows(statement *Statement, table *Table) []Row {
 }
 
 func selectJoinedRows(statement *Statement, table *Table) []Row {
-	baseRows := readAllRows(table)
+	leftRows := readAllRows(tableView(table, TableDefinition{Schema: statement.SelectJoin.Left.Schema, RootPageNum: statement.SelectJoin.Left.RootPageNum}))
+	rightRows := readAllRows(tableView(table, TableDefinition{Schema: statement.SelectJoin.Right.Schema, RootPageNum: statement.SelectJoin.Right.RootPageNum}))
 	rows := []Row{}
-	for _, left := range baseRows {
-		for _, right := range baseRows {
-			joined := joinRows(left, statement.SelectJoin.Left, right, statement.SelectJoin.Right, table.Schema)
+	for _, left := range leftRows {
+		for _, right := range rightRows {
+			joined := joinRows(left, statement.SelectJoin.Left, right, statement.SelectJoin.Right)
 			if !groupMatchesHaving([]Row{joined}, joined, statement.SelectJoin.On) {
 				continue
 			}
@@ -2952,10 +3079,12 @@ func readAllRows(table *Table) []Row {
 	return rows
 }
 
-func joinRows(left Row, leftReference TableReference, right Row, rightReference TableReference, schema TableSchema) Row {
-	values := make(map[string]Value, len(schema.Columns)*2)
-	for _, column := range schema.Columns {
+func joinRows(left Row, leftReference TableReference, right Row, rightReference TableReference) Row {
+	values := make(map[string]Value, len(leftReference.Schema.Columns)+len(rightReference.Schema.Columns))
+	for _, column := range leftReference.Schema.Columns {
 		values[qualifiedColumnName(leftReference, column.Name)] = rowValue(left, column)
+	}
+	for _, column := range rightReference.Schema.Columns {
 		values[qualifiedColumnName(rightReference, column.Name)] = rowValue(right, column)
 	}
 

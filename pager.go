@@ -47,12 +47,15 @@ func dbOpen(filename string) (*Table, error) {
 		RootPageNum: 0,
 		Schema:      DefaultTableSchema(),
 	}
+	table.Tables = map[string]TableDefinition{
+		normalizeTableName(table.Schema.Name): {Schema: table.Schema, RootPageNum: defaultRootPageNum},
+	}
 
 	if pager.NumPages == 0 {
 		table.RootPageNum = defaultRootPageNum
 		table.HasMetadata = true
 		metadataPage := getPage(pager, metadataPageNum)
-		if err := writeDatabaseMetadata(metadataPage, databaseMetadata{Schema: table.Schema}); err != nil {
+		if err := writeDatabaseMetadata(metadataPage, databaseMetadata{Tables: tableDefinitions(table)}); err != nil {
 			return nil, err
 		}
 
@@ -69,7 +72,13 @@ func dbOpen(filename string) (*Table, error) {
 			return nil, err
 		}
 		table.RootPageNum = defaultRootPageNum
-		table.Schema = metadata.Schema
+		table.Tables = metadataTables(metadata)
+		activeDefinition := tableDefinitions(table)[0]
+		if defaultDefinition, ok := tableDefinition(table, defaultTableName); ok {
+			activeDefinition = defaultDefinition
+		}
+		table.Schema = activeDefinition.Schema
+		table.RootPageNum = activeDefinition.RootPageNum
 		table.HasMetadata = true
 	}
 
@@ -134,7 +143,7 @@ func dbClose(table *Table) error {
 	pager := table.Pager
 	if table.HasMetadata {
 		metadataPage := getPage(pager, metadataPageNum)
-		if err := writeDatabaseMetadata(metadataPage, databaseMetadata{Schema: table.Schema}); err != nil {
+		if err := writeDatabaseMetadata(metadataPage, databaseMetadata{Tables: tableDefinitions(table)}); err != nil {
 			return err
 		}
 	}
