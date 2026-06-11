@@ -4,17 +4,18 @@ import "os"
 
 // Statement はパース済みの命令を表す。
 type Statement struct {
-	Type          StatementType
-	RowToInsert   Row
-	ReplaceTable  bool
-	SelectByKey   *uint32
-	SelectColumns []Column
-	SelectItems   []SelectItem
-	SelectWhere   WhereExpression
-	SelectGroupBy []Column
-	SelectOrderBy *OrderByClause
-	SelectLimit   *uint32
-	Schema        TableSchema
+	Type           StatementType
+	RowToInsert    Row
+	ReplaceTable   bool
+	SelectByKey    *uint32
+	SelectColumns  []Column
+	SelectItems    []SelectItem
+	SelectFromDual bool
+	SelectWhere    WhereExpression
+	SelectGroupBy  []Column
+	SelectOrderBy  *OrderByClause
+	SelectLimit    *uint32
+	Schema         TableSchema
 }
 
 // SelectItem はSELECT句に指定された表示対象を表す。

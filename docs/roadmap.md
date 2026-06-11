@@ -18,6 +18,7 @@
   - 完了: `order by <column> asc|desc` を扱う。
   - 完了: `limit <count>` を扱う。
   - 完了: SELECT句で数値型の四則演算を扱う。
+  - 完了: OracleのDUAL表に近い仮想テーブル `dual` を扱う。
   - 完了: 集約関数 `count(*)`、`count(column)`、`min`、`max`、`sum`、`avg` を扱う。
   - 完了: `group by <column>` と集約関数を組み合わせる。
   - HAVING: GROUP BY後の集約結果を条件で絞り込む。

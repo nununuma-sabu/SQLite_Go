@@ -669,6 +669,59 @@ func TestRunPrintsSyntaxErrorForInvalidSelectArithmeticExpression(t *testing.T) 
 	}
 }
 
+func TestRunExecutesSelectFromDual(t *testing.T) {
+	got := runTempScript(t, []string{
+		"SELECT 1 + 2, (10 - 4) / 3 FROM dual;",
+		"SELECT * FROM dual;",
+		"SELECT dummy FROM dual WHERE dummy = 'X';",
+		"SELECT count(*) FROM dual;",
+		".exit",
+	})
+
+	wantLines := []string{}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"1 + 2", "(10 - 4) / 3"},
+		[]string{"3", "2"},
+	)...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"dummy"},
+		[]string{"X"},
+	)...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"dummy"},
+		[]string{"X"},
+	)...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"count(*)"},
+		[]string{"1"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPrintsSyntaxErrorForInvalidSelectFromDual(t *testing.T) {
+	got := runTempScript(t, []string{
+		"SELECT username FROM dual;",
+		"SELECT * FROM dual GROUP BY dummy;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesAggregateFunctions(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table sales (id integer primary key, region text, amount integer, score real)",

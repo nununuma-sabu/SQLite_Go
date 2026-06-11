@@ -442,6 +442,7 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 			}
 			statement.SelectColumns = selectClause.Columns
 			statement.SelectItems = selectClause.Items
+			statement.SelectFromDual = selectClause.FromDual
 			statement.SelectWhere = selectClause.Where
 			statement.SelectGroupBy = selectClause.GroupBy
 			statement.SelectOrderBy = selectClause.OrderBy
@@ -477,13 +478,20 @@ func prepareStatement(input string, statement *Statement, schema TableSchema) Pr
 }
 
 type selectClause struct {
-	Columns []Column
-	Items   []SelectItem
-	Where   WhereExpression
-	GroupBy []Column
-	OrderBy *OrderByClause
-	Limit   *uint32
+	Columns  []Column
+	Items    []SelectItem
+	FromDual bool
+	Where    WhereExpression
+	GroupBy  []Column
+	OrderBy  *OrderByClause
+	Limit    *uint32
 }
+
+const (
+	dualTableName   = "dual"
+	dualColumnName  = "dummy"
+	dualColumnValue = "X"
+)
 
 func parseSelectStatement(input string, schema TableSchema) (selectClause, PrepareResult) {
 	trimmed := strings.TrimSpace(input)
@@ -518,57 +526,73 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 
 	orderByIndex := findSelectOrderByIndex(tableWhereAndOrder)
 	tableAndWhere := tableWhereAndOrder
+	orderByInput := ""
 	var orderBy *OrderByClause
 	if orderByIndex >= 0 {
 		tableAndWhere = strings.TrimSpace(tableWhereAndOrder[:orderByIndex])
-		orderByInput := strings.TrimSpace(tableWhereAndOrder[orderByIndex+len(" order by "):])
+		orderByInput = strings.TrimSpace(tableWhereAndOrder[orderByIndex+len(" order by "):])
 		if orderByInput == "" {
 			return selectClause{}, PrepareSyntaxError
 		}
-		clause, result := parseOrderByClause(orderByInput, schema)
+	}
+
+	groupByIndex := findSelectGroupByIndex(tableAndWhere)
+	tableAndWhereOnly := tableAndWhere
+	groupByInput := ""
+	var groupBy []Column
+	if groupByIndex >= 0 {
+		tableAndWhereOnly = strings.TrimSpace(tableAndWhere[:groupByIndex])
+		groupByInput = strings.TrimSpace(tableAndWhere[groupByIndex+len(" group by "):])
+	}
+
+	whereIndex := findSelectWhereIndex(tableAndWhereOnly)
+	tableName := tableAndWhereOnly
+	whereInput := ""
+	var where WhereExpression
+	if whereIndex >= 0 {
+		tableName = strings.TrimSpace(tableAndWhereOnly[:whereIndex])
+		whereInput = strings.TrimSpace(tableAndWhereOnly[whereIndex+len(" where "):])
+		if whereInput == "" {
+			return selectClause{}, PrepareSyntaxError
+		}
+	}
+
+	fromDual := strings.EqualFold(tableName, dualTableName)
+	sourceSchema := schema
+	if fromDual {
+		sourceSchema = DualTableSchema()
+	}
+	if columnList == "" || tableName == "" || (!fromDual && !strings.EqualFold(tableName, schema.Name)) {
+		return selectClause{}, PrepareSyntaxError
+	}
+
+	if whereInput != "" {
+		expression, result := parseWhereExpression(whereInput, sourceSchema)
+		if result != PrepareSuccess {
+			return selectClause{}, result
+		}
+		where = expression
+	}
+	if groupByInput != "" {
+		columns, result := parseGroupByClause(groupByInput, sourceSchema)
+		if result != PrepareSuccess {
+			return selectClause{}, result
+		}
+		groupBy = columns
+	}
+	if orderByInput != "" {
+		clause, result := parseOrderByClause(orderByInput, sourceSchema)
 		if result != PrepareSuccess {
 			return selectClause{}, result
 		}
 		orderBy = &clause
 	}
 
-	groupByIndex := findSelectGroupByIndex(tableAndWhere)
-	tableAndWhereOnly := tableAndWhere
-	var groupBy []Column
-	if groupByIndex >= 0 {
-		tableAndWhereOnly = strings.TrimSpace(tableAndWhere[:groupByIndex])
-		groupByInput := strings.TrimSpace(tableAndWhere[groupByIndex+len(" group by "):])
-		columns, result := parseGroupByClause(groupByInput, schema)
-		if result != PrepareSuccess {
-			return selectClause{}, result
-		}
-		groupBy = columns
-	}
-
-	whereIndex := findSelectWhereIndex(tableAndWhereOnly)
-	tableName := tableAndWhereOnly
-	var where WhereExpression
-	if whereIndex >= 0 {
-		tableName = strings.TrimSpace(tableAndWhereOnly[:whereIndex])
-		whereInput := strings.TrimSpace(tableAndWhereOnly[whereIndex+len(" where "):])
-		if whereInput == "" {
-			return selectClause{}, PrepareSyntaxError
-		}
-		expression, result := parseWhereExpression(whereInput, schema)
-		if result != PrepareSuccess {
-			return selectClause{}, result
-		}
-		where = expression
-	}
-	if columnList == "" || tableName == "" || !strings.EqualFold(tableName, schema.Name) {
-		return selectClause{}, PrepareSyntaxError
-	}
-
 	if columnList == "*" {
 		if len(groupBy) > 0 {
 			return selectClause{}, PrepareSyntaxError
 		}
-		return selectClause{Columns: schema.Columns, Items: selectItemsFromColumns(schema.Columns), Where: where, GroupBy: groupBy, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+		return selectClause{Columns: sourceSchema.Columns, Items: selectItemsFromColumns(sourceSchema.Columns), FromDual: fromDual, Where: where, GroupBy: groupBy, OrderBy: orderBy, Limit: limit}, PrepareSuccess
 	}
 
 	itemInputs, ok := splitSQLList(columnList)
@@ -582,7 +606,7 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		if itemInput == "" || itemInput == "*" {
 			return selectClause{}, PrepareSyntaxError
 		}
-		expression, result := parseValueExpression(itemInput, schema)
+		expression, result := parseValueExpression(itemInput, sourceSchema)
 		if result != PrepareSuccess {
 			return selectClause{}, PrepareSyntaxError
 		}
@@ -598,7 +622,32 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		return selectClause{}, PrepareSyntaxError
 	}
 
-	return selectClause{Columns: columns, Items: items, Where: where, GroupBy: groupBy, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+	return selectClause{Columns: columns, Items: items, FromDual: fromDual, Where: where, GroupBy: groupBy, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+}
+
+func DualTableSchema() TableSchema {
+	return TableSchema{
+		Name: dualTableName,
+		Columns: []Column{
+			{
+				Name:         dualColumnName,
+				DeclaredType: "TEXT",
+				Affinity:     AffinityText,
+				MaxLength:    1,
+			},
+		},
+	}
+}
+
+func dualRow() Row {
+	return Row{
+		Values: map[string]Value{
+			dualColumnName: {
+				StorageClass: StorageText,
+				Text:         dualColumnValue,
+			},
+		},
+	}
 }
 
 func selectItemsFromColumns(columns []Column) []SelectItem {
@@ -1998,6 +2047,14 @@ func limitRows(rows []Row, limit *uint32) []Row {
 }
 
 func selectRows(statement *Statement, table *Table) []Row {
+	if statement.SelectFromDual {
+		row := dualRow()
+		if rowMatchesWhere(row, statement.SelectWhere) {
+			return []Row{row}
+		}
+		return nil
+	}
+
 	if statement.SelectByKey != nil {
 		cursor := tableFind(table, *statement.SelectByKey)
 		node := getPage(table.Pager, cursor.PageNum)
