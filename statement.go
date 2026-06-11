@@ -489,11 +489,47 @@ type selectClause struct {
 	Limit    *uint32
 }
 
+type columnResolver struct {
+	Schema     TableSchema
+	TableAlias string
+}
+
 const (
 	dualTableName   = "dual"
 	dualColumnName  = "dummy"
 	dualColumnValue = "X"
 )
+
+func newColumnResolver(schema TableSchema, tableAlias string) columnResolver {
+	return columnResolver{Schema: schema, TableAlias: tableAlias}
+}
+
+func (resolver columnResolver) Column(name string) (Column, bool) {
+	qualifier, columnName, qualified := splitQualifiedName(name)
+	if qualified {
+		if !strings.EqualFold(qualifier, resolver.Schema.Name) &&
+			(resolver.TableAlias == "" || !strings.EqualFold(qualifier, resolver.TableAlias)) {
+			return Column{}, false
+		}
+		return resolver.Schema.Column(columnName)
+	}
+
+	return resolver.Schema.Column(name)
+}
+
+func splitQualifiedName(name string) (string, string, bool) {
+	parts := strings.Split(name, ".")
+	if len(parts) != 2 {
+		return "", name, false
+	}
+	qualifier := strings.TrimSpace(parts[0])
+	columnName := strings.TrimSpace(parts[1])
+	if qualifier == "" || columnName == "" {
+		return "", "", false
+	}
+
+	return qualifier, columnName, true
+}
 
 func parseSelectStatement(input string, schema TableSchema) (selectClause, PrepareResult) {
 	trimmed := strings.TrimSpace(input)
@@ -560,17 +596,21 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	}
 
 	whereIndex := findSelectWhereIndex(tableAndWhereOnly)
-	tableName := tableAndWhereOnly
+	tableReference := tableAndWhereOnly
 	whereInput := ""
 	var where WhereExpression
 	if whereIndex >= 0 {
-		tableName = strings.TrimSpace(tableAndWhereOnly[:whereIndex])
+		tableReference = strings.TrimSpace(tableAndWhereOnly[:whereIndex])
 		whereInput = strings.TrimSpace(tableAndWhereOnly[whereIndex+len(" where "):])
 		if whereInput == "" {
 			return selectClause{}, PrepareSyntaxError
 		}
 	}
 
+	tableName, tableAlias, ok := parseTableReference(tableReference)
+	if !ok {
+		return selectClause{}, PrepareSyntaxError
+	}
 	fromDual := strings.EqualFold(tableName, dualTableName)
 	sourceSchema := schema
 	if fromDual {
@@ -579,30 +619,31 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 	if columnList == "" || tableName == "" || (!fromDual && !strings.EqualFold(tableName, schema.Name)) {
 		return selectClause{}, PrepareSyntaxError
 	}
+	resolver := newColumnResolver(sourceSchema, tableAlias)
 
 	if whereInput != "" {
-		expression, result := parseWhereExpression(whereInput, sourceSchema)
+		expression, result := parseWhereExpression(whereInput, resolver)
 		if result != PrepareSuccess {
 			return selectClause{}, result
 		}
 		where = expression
 	}
 	if groupByInput != "" {
-		columns, result := parseGroupByClause(groupByInput, sourceSchema)
+		columns, result := parseGroupByClause(groupByInput, resolver)
 		if result != PrepareSuccess {
 			return selectClause{}, result
 		}
 		groupBy = columns
 	}
 	if havingInput != "" {
-		expression, result := parseHavingExpression(havingInput, sourceSchema)
+		expression, result := parseHavingExpression(havingInput, resolver)
 		if result != PrepareSuccess {
 			return selectClause{}, result
 		}
 		having = expression
 	}
 	if orderByInput != "" {
-		clause, result := parseOrderByClause(orderByInput, sourceSchema)
+		clause, result := parseOrderByClause(orderByInput, resolver)
 		if result != PrepareSuccess {
 			return selectClause{}, result
 		}
@@ -627,17 +668,24 @@ func parseSelectStatement(input string, schema TableSchema) (selectClause, Prepa
 		if itemInput == "" || itemInput == "*" {
 			return selectClause{}, PrepareSyntaxError
 		}
-		expression, result := parseValueExpression(itemInput, sourceSchema)
+		expression, alias, expressionInput, result := parseSelectItem(itemInput, resolver)
 		if result != PrepareSuccess {
 			return selectClause{}, PrepareSyntaxError
 		}
+		header := alias
 		if expression.Kind == ValueExpressionColumn {
 			columns = append(columns, expression.Column)
-			items = append(items, SelectItem{Header: expression.Column.Name, Expression: expression})
+			if header == "" {
+				header = expression.Column.Name
+			}
+			items = append(items, SelectItem{Header: header, Expression: expression})
 			continue
 		}
 
-		items = append(items, SelectItem{Header: itemInput, Expression: expression})
+		if header == "" {
+			header = expressionInput
+		}
+		items = append(items, SelectItem{Header: header, Expression: expression})
 	}
 	if !selectItemsAreValidForGrouping(items, groupBy) {
 		return selectClause{}, PrepareSyntaxError
@@ -677,6 +725,146 @@ func dualRow() Row {
 			},
 		},
 	}
+}
+
+func parseTableReference(input string) (string, string, bool) {
+	fields := strings.Fields(strings.TrimSpace(input))
+	switch len(fields) {
+	case 1:
+		return fields[0], "", true
+	case 2:
+		if strings.EqualFold(fields[1], "as") || !isIdentifier(fields[1]) {
+			return "", "", false
+		}
+		return fields[0], fields[1], true
+	case 3:
+		if !strings.EqualFold(fields[1], "as") || !isIdentifier(fields[2]) {
+			return "", "", false
+		}
+		return fields[0], fields[2], true
+	default:
+		return "", "", false
+	}
+}
+
+func parseSelectItem(input string, resolver columnResolver) (ValueExpression, string, string, PrepareResult) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return ValueExpression{}, "", "", PrepareSyntaxError
+	}
+	if expression, alias, expressionInput, ok, result := parseExplicitSelectItemAlias(input, resolver); ok {
+		return expression, alias, expressionInput, result
+	}
+	if expression, result := parseValueExpression(input, resolver); result == PrepareSuccess {
+		return expression, "", input, PrepareSuccess
+	}
+
+	expressionInput, alias, ok := parseImplicitSelectItemAlias(input)
+	if !ok {
+		return ValueExpression{}, "", "", PrepareSyntaxError
+	}
+	expression, result := parseValueExpression(expressionInput, resolver)
+	if result != PrepareSuccess {
+		return ValueExpression{}, "", "", result
+	}
+
+	return expression, alias, expressionInput, PrepareSuccess
+}
+
+func parseExplicitSelectItemAlias(input string, resolver columnResolver) (ValueExpression, string, string, bool, PrepareResult) {
+	input = strings.TrimSpace(input)
+	if index := findTopLevelKeyword(input, "as"); index >= 0 {
+		expression := strings.TrimSpace(input[:index])
+		alias := strings.TrimSpace(input[index+len(" as "):])
+		if expression == "" || !isIdentifier(alias) {
+			return ValueExpression{}, "", "", true, PrepareSyntaxError
+		}
+		parsed, result := parseValueExpression(expression, resolver)
+		if result != PrepareSuccess {
+			return ValueExpression{}, "", "", true, result
+		}
+		return parsed, alias, expression, true, PrepareSuccess
+	}
+
+	return ValueExpression{}, "", "", false, PrepareSuccess
+}
+
+func parseImplicitSelectItemAlias(input string) (string, string, bool) {
+	index := lastTopLevelWhitespace(input)
+	if index < 0 {
+		return "", "", false
+	}
+	expression := strings.TrimSpace(input[:index])
+	alias := strings.TrimSpace(input[index:])
+	if expression == "" || !isIdentifier(alias) || isSelectAliasReserved(alias) {
+		return "", "", false
+	}
+
+	return expression, alias, true
+}
+
+func lastTopLevelWhitespace(input string) int {
+	inString := false
+	depth := 0
+	last := -1
+	for i := 0; i < len(input); i++ {
+		if input[i] == '\'' {
+			if inString && i+1 < len(input) && input[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch input[i] {
+		case '(':
+			depth++
+			continue
+		case ')':
+			depth--
+			if depth < 0 {
+				return -1
+			}
+			continue
+		}
+		if depth == 0 && unicode.IsSpace(rune(input[i])) {
+			last = i
+		}
+	}
+
+	return last
+}
+
+func isIdentifier(input string) bool {
+	if input == "" {
+		return false
+	}
+	for i, value := range input {
+		if i == 0 {
+			if !unicode.IsLetter(value) && value != '_' {
+				return false
+			}
+			continue
+		}
+		if !unicode.IsLetter(value) && !unicode.IsDigit(value) && value != '_' {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isSelectAliasReserved(input string) bool {
+	return strings.EqualFold(input, "where") ||
+		strings.EqualFold(input, "group") ||
+		strings.EqualFold(input, "having") ||
+		strings.EqualFold(input, "order") ||
+		strings.EqualFold(input, "limit") ||
+		strings.EqualFold(input, "and") ||
+		strings.EqualFold(input, "or")
 }
 
 func selectItemsFromColumns(columns []Column) []SelectItem {
@@ -828,7 +1016,7 @@ func parseLimitClause(input string) (uint32, PrepareResult) {
 	return uint32(limit), PrepareSuccess
 }
 
-func parseGroupByClause(input string, schema TableSchema) ([]Column, PrepareResult) {
+func parseGroupByClause(input string, resolver columnResolver) ([]Column, PrepareResult) {
 	columnNames, ok := splitSQLList(input)
 	if !ok || len(columnNames) == 0 {
 		return nil, PrepareSyntaxError
@@ -837,7 +1025,7 @@ func parseGroupByClause(input string, schema TableSchema) ([]Column, PrepareResu
 	columns := make([]Column, 0, len(columnNames))
 	for _, columnName := range columnNames {
 		columnName = strings.TrimSpace(columnName)
-		column, ok := schema.Column(columnName)
+		column, ok := resolver.Column(columnName)
 		if columnName == "" || !ok {
 			return nil, PrepareSyntaxError
 		}
@@ -847,13 +1035,13 @@ func parseGroupByClause(input string, schema TableSchema) ([]Column, PrepareResu
 	return columns, PrepareSuccess
 }
 
-func parseOrderByClause(input string, schema TableSchema) (OrderByClause, PrepareResult) {
+func parseOrderByClause(input string, resolver columnResolver) (OrderByClause, PrepareResult) {
 	fields := strings.Fields(input)
 	if len(fields) < 1 || len(fields) > 2 {
 		return OrderByClause{}, PrepareSyntaxError
 	}
 
-	column, ok := schema.Column(fields[0])
+	column, ok := resolver.Column(fields[0])
 	if !ok {
 		return OrderByClause{}, PrepareSyntaxError
 	}
@@ -873,22 +1061,22 @@ func parseOrderByClause(input string, schema TableSchema) (OrderByClause, Prepar
 	return OrderByClause{Column: column, Direction: direction}, PrepareSuccess
 }
 
-func parseHavingExpression(input string, schema TableSchema) (HavingExpression, PrepareResult) {
+func parseHavingExpression(input string, resolver columnResolver) (HavingExpression, PrepareResult) {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return HavingExpression{}, PrepareSyntaxError
 	}
-	return parseHavingOr(input, schema)
+	return parseHavingOr(input, resolver)
 }
 
-func parseHavingOr(input string, schema TableSchema) (HavingExpression, PrepareResult) {
+func parseHavingOr(input string, resolver columnResolver) (HavingExpression, PrepareResult) {
 	index := findTopLevelKeyword(input, "or")
 	if index >= 0 {
-		left, result := parseHavingOr(strings.TrimSpace(input[:index]), schema)
+		left, result := parseHavingOr(strings.TrimSpace(input[:index]), resolver)
 		if result != PrepareSuccess {
 			return HavingExpression{}, result
 		}
-		right, result := parseHavingAnd(strings.TrimSpace(input[index+len(" or "):]), schema)
+		right, result := parseHavingAnd(strings.TrimSpace(input[index+len(" or "):]), resolver)
 		if result != PrepareSuccess {
 			return HavingExpression{}, result
 		}
@@ -897,17 +1085,17 @@ func parseHavingOr(input string, schema TableSchema) (HavingExpression, PrepareR
 		return HavingExpression{Kind: WhereExpressionOr, Left: &leftNode, Right: &rightNode}, PrepareSuccess
 	}
 
-	return parseHavingAnd(input, schema)
+	return parseHavingAnd(input, resolver)
 }
 
-func parseHavingAnd(input string, schema TableSchema) (HavingExpression, PrepareResult) {
+func parseHavingAnd(input string, resolver columnResolver) (HavingExpression, PrepareResult) {
 	index := findTopLevelKeyword(input, "and")
 	if index >= 0 {
-		left, result := parseHavingAnd(strings.TrimSpace(input[:index]), schema)
+		left, result := parseHavingAnd(strings.TrimSpace(input[:index]), resolver)
 		if result != PrepareSuccess {
 			return HavingExpression{}, result
 		}
-		right, result := parseHavingPrimary(strings.TrimSpace(input[index+len(" and "):]), schema)
+		right, result := parseHavingPrimary(strings.TrimSpace(input[index+len(" and "):]), resolver)
 		if result != PrepareSuccess {
 			return HavingExpression{}, result
 		}
@@ -916,19 +1104,19 @@ func parseHavingAnd(input string, schema TableSchema) (HavingExpression, Prepare
 		return HavingExpression{Kind: WhereExpressionAnd, Left: &leftNode, Right: &rightNode}, PrepareSuccess
 	}
 
-	return parseHavingPrimary(input, schema)
+	return parseHavingPrimary(input, resolver)
 }
 
-func parseHavingPrimary(input string, schema TableSchema) (HavingExpression, PrepareResult) {
+func parseHavingPrimary(input string, resolver columnResolver) (HavingExpression, PrepareResult) {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return HavingExpression{}, PrepareSyntaxError
 	}
 	if hasWrappingParentheses(input) {
-		return parseHavingOr(strings.TrimSpace(input[1:len(input)-1]), schema)
+		return parseHavingOr(strings.TrimSpace(input[1:len(input)-1]), resolver)
 	}
 
-	condition, result := parseHavingCondition(input, schema)
+	condition, result := parseHavingCondition(input, resolver)
 	if result != PrepareSuccess {
 		return HavingExpression{}, result
 	}
@@ -936,9 +1124,9 @@ func parseHavingPrimary(input string, schema TableSchema) (HavingExpression, Pre
 	return HavingExpression{Kind: WhereExpressionCondition, Condition: condition}, PrepareSuccess
 }
 
-func parseHavingCondition(input string, schema TableSchema) (HavingCondition, PrepareResult) {
+func parseHavingCondition(input string, resolver columnResolver) (HavingCondition, PrepareResult) {
 	if index, operator, ok := findTopLevelIsNullOperator(input); ok {
-		left, result := parseValueExpression(strings.TrimSpace(input[:index]), schema)
+		left, result := parseValueExpression(strings.TrimSpace(input[:index]), resolver)
 		if result != PrepareSuccess {
 			return HavingCondition{}, result
 		}
@@ -949,11 +1137,11 @@ func parseHavingCondition(input string, schema TableSchema) (HavingCondition, Pr
 	if !ok {
 		return HavingCondition{}, PrepareSyntaxError
 	}
-	left, result := parseValueExpression(strings.TrimSpace(input[:index]), schema)
+	left, result := parseValueExpression(strings.TrimSpace(input[:index]), resolver)
 	if result != PrepareSuccess {
 		return HavingCondition{}, result
 	}
-	right, result := parseValueExpression(strings.TrimSpace(input[index+len(operatorText):]), schema)
+	right, result := parseValueExpression(strings.TrimSpace(input[index+len(operatorText):]), resolver)
 	if result != PrepareSuccess {
 		return HavingCondition{}, result
 	}
@@ -1134,13 +1322,13 @@ func isTopLevelPosition(input string, targetIndex int) bool {
 	return !inString && depth == 0
 }
 
-func parseValueExpression(input string, schema TableSchema) (ValueExpression, PrepareResult) {
+func parseValueExpression(input string, resolver columnResolver) (ValueExpression, PrepareResult) {
 	tokens, ok := parseValueExpressionTokens(input)
 	if !ok || len(tokens) == 0 {
 		return ValueExpression{}, PrepareSyntaxError
 	}
 
-	parser := valueExpressionParser{Tokens: tokens, Schema: schema}
+	parser := valueExpressionParser{Tokens: tokens, Resolver: resolver}
 	expression, result := parser.parseAdditive()
 	if result != PrepareSuccess || parser.Position != len(tokens) {
 		return ValueExpression{}, PrepareSyntaxError
@@ -1274,7 +1462,7 @@ func isNumericExpression(expression ValueExpression) bool {
 type valueExpressionParser struct {
 	Tokens   []insertField
 	Position int
-	Schema   TableSchema
+	Resolver columnResolver
 }
 
 func (parser *valueExpressionParser) parseAdditive() (ValueExpression, PrepareResult) {
@@ -1349,7 +1537,7 @@ func (parser *valueExpressionParser) parsePrimary() (ValueExpression, PrepareRes
 	if function, ok := parseAggregateFunctionName(token.Value); ok && parser.peekValue("(") {
 		return parser.parseAggregateExpression(function)
 	}
-	if column, ok := parser.Schema.Column(token.Value); ok {
+	if column, ok := parser.Resolver.Column(token.Value); ok {
 		return ValueExpression{Kind: ValueExpressionColumn, Column: column}, PrepareSuccess
 	}
 	if value, ok := parseNumericLiteral(token.Value); ok {
@@ -1562,13 +1750,13 @@ func parseNumericLiteral(input string) (Value, bool) {
 	return Value{StorageClass: StorageInteger, Integer: integer}, true
 }
 
-func parseWhereExpression(input string, schema TableSchema) (WhereExpression, PrepareResult) {
+func parseWhereExpression(input string, resolver columnResolver) (WhereExpression, PrepareResult) {
 	tokens, ok := parseWhereTokens(input)
 	if !ok || len(tokens) == 0 {
 		return WhereExpression{}, PrepareSyntaxError
 	}
 
-	parser := whereExpressionParser{Tokens: tokens, Schema: schema}
+	parser := whereExpressionParser{Tokens: tokens, Resolver: resolver}
 	expression, result := parser.parseOr()
 	if result != PrepareSuccess || parser.Position != len(tokens) {
 		return WhereExpression{}, PrepareSyntaxError
@@ -1580,7 +1768,7 @@ func parseWhereExpression(input string, schema TableSchema) (WhereExpression, Pr
 type whereExpressionParser struct {
 	Tokens   []insertField
 	Position int
-	Schema   TableSchema
+	Resolver columnResolver
 }
 
 func (parser *whereExpressionParser) parseOr() (WhereExpression, PrepareResult) {
@@ -1652,7 +1840,7 @@ func (parser *whereExpressionParser) parseCondition() (WhereCondition, PrepareRe
 		return WhereCondition{}, PrepareSyntaxError
 	}
 
-	column, ok := parser.Schema.Column(columnToken.Value)
+	column, ok := parser.Resolver.Column(columnToken.Value)
 	if !ok {
 		return WhereCondition{}, PrepareSyntaxError
 	}

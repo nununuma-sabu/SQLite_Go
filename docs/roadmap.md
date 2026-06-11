@@ -23,7 +23,7 @@
   - 完了: `group by <column>` と集約関数を組み合わせる。
   - 完了: HAVINGでGROUP BY後の集約結果を条件で絞り込む。
   - DISTINCT: 重複行を除外する。
-  - 式・別名: `select name as display_name` のような表示名を扱う。
+  - 完了: 表名、カラム名、式の別名を扱う。
   - 複数カラムORDER BY: `order by height desc, name asc` を扱う。
   - OFFSET: `limit` と組み合わせてページングできるようにする。
 - 更新処理: `update <id> ...` を追加し、既存レコードを書き換える。

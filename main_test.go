@@ -926,6 +926,102 @@ func TestRunExecutesSelectColumnsFromCustomTable(t *testing.T) {
 	}
 }
 
+func TestRunExecutesSelectWithTableAndColumnAliases(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real)",
+		"insert 1 Alice 152.5",
+		"insert 2 Bob 181",
+		"SELECT p.name AS display_name, p.height + 1 adjusted_height FROM people AS p WHERE p.id = 1;",
+		"SELECT person.name nickname FROM people person WHERE person.height > 170;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"display_name", "adjusted_height"},
+		[]string{"Alice", "153.5"},
+	)...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"nickname"},
+		[]string{"Bob"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesGroupByWithTableAlias(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table sales (id integer primary key, region text, amount integer)",
+		"insert 1 East 10",
+		"insert 2 East 20",
+		"insert 3 West 7",
+		"SELECT s.region AS area, count(*) total, sum(s.amount) amount_total FROM sales s GROUP BY s.region HAVING sum(s.amount) > 10;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ",
+		[]string{"area", "total", "amount_total"},
+		[]string{"East", "2", "30"},
+	)...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesDualWithTableAlias(t *testing.T) {
+	got := runTempScript(t, []string{
+		"SELECT d.dummy AS marker FROM dual d;",
+		".exit",
+	})
+
+	wantLines := expectedTableLines("db > ",
+		[]string{"marker"},
+		[]string{"X"},
+	)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPrintsSyntaxErrorForInvalidAliases(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text)",
+		"SELECT other.name FROM people p;",
+		"SELECT p.name AS 1bad FROM people p;",
+		"SELECT p.name FROM people AS;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunStoresBlobFromFile(t *testing.T) {
 	dir := t.TempDir()
 	blobPath := filepath.Join(dir, "sample.bin")
