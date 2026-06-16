@@ -286,6 +286,86 @@ func TestRunRejectsUpdateConstraintViolations(t *testing.T) {
 	}
 }
 
+func TestRunExecutesDeleteWithWhere(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real)",
+		"insert 1 Alice 165.2",
+		"insert 2 Bob 172.4",
+		"insert 3 Carol 158.9",
+		"insert 4 Dave 180.1",
+		"DELETE FROM people WHERE height < 170 OR name = 'Dave';",
+		"SELECT id, name FROM people ORDER BY id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name"}, []string{"2", "Bob"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesDeleteWithoutWhere(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"insert 2 bob bob@example.com",
+		"DELETE FROM users;",
+		"select",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesDeleteFromNamedTable(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, department_id integer)",
+		"create table departments (id integer primary key, name text)",
+		"insert into people values 1 Alice 10",
+		"insert into people values 2 Bob 20",
+		"insert into departments values 10 Engineering",
+		"DELETE FROM people WHERE department_id = 20;",
+		"SELECT id, name FROM people ORDER BY id ASC;",
+		"SELECT id, name FROM departments ORDER BY id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name"}, []string{"1", "Alice"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name"}, []string{"10", "Engineering"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunSQLScriptExecutesSemicolonSeparatedStatements(t *testing.T) {
 	got := runTempSQLScript(t, `
 -- setup
@@ -1409,6 +1489,33 @@ func TestRunPersistsMultipleTables(t *testing.T) {
 	}
 }
 
+func TestRunPersistsDelete(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	runScript(t, dbPath, []string{
+		"insert 1 alice alice@example.com",
+		"insert 2 bob bob@example.com",
+		"insert 3 carol carol@example.com",
+		"DELETE FROM users WHERE id = 2;",
+		".exit",
+	})
+
+	got := runScript(t, dbPath, []string{
+		"SELECT id, username FROM users ORDER BY id ASC;",
+		".exit",
+	})
+
+	wantLines := expectedTableLines("db > ",
+		[]string{"id", "username"},
+		[]string{"1", "alice"},
+		[]string{"3", "carol"},
+	)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunPrintsSyntaxErrorForInvalidJoin(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table people (id integer primary key, name text)",
@@ -1541,6 +1648,29 @@ func TestRunPrintsSyntaxErrorForInvalidUpdate(t *testing.T) {
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Primary key must be positive.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPrintsSyntaxErrorForInvalidDelete(t *testing.T) {
+	got := runTempScript(t, []string{
+		"DELETE users WHERE id = 1;",
+		"DELETE FROM;",
+		"DELETE FROM missing;",
+		"DELETE FROM users WHERE missing = 1;",
+		"DELETE FROM users WHERE id = 1 AND;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
 		"db > ",
 	}, "\n")
 	if got != want {

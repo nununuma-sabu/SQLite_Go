@@ -9,6 +9,7 @@ type Statement struct {
 	RowToInsert       Row
 	UpdateAssignments []UpdateAssignment
 	UpdateWhere       WhereExpression
+	DeleteWhere       WhereExpression
 	ReplaceTable      bool
 	SelectByKey       *uint32
 	SelectColumns     []Column

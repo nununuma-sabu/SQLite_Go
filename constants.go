@@ -119,6 +119,7 @@ const (
 	StatementSelect
 	StatementCreateTable
 	StatementUpdate
+	StatementDelete
 )
 
 // NodeType はB-Treeノードの種類を表す。

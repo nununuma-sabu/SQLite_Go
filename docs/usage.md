@@ -400,6 +400,17 @@ Executed.
 db >
 ```
 
+`delete from` で既存レコードを削除できます。
+`where` を指定すると条件に一致した行だけを削除し、省略した場合は全行を削除します。
+
+```text
+db > delete from users where id = 1;
+Executed.
+db > delete from users where username = bob or email is null;
+Executed.
+db >
+```
+
 ## メタコマンド
 
 | コマンド | 説明 |

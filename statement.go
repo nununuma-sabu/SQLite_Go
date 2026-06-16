@@ -146,6 +146,58 @@ func prepareUpdate(input string, statement *Statement, table *Table) PrepareResu
 	return PrepareSuccess
 }
 
+func prepareDelete(input string, statement *Statement, table *Table) PrepareResult {
+	statement.Type = StatementDelete
+
+	trimmed := strings.TrimSpace(input)
+	trimmed = strings.TrimSuffix(trimmed, ";")
+	trimmed = strings.TrimSpace(trimmed)
+
+	const deletePrefix = "delete from "
+	if !strings.HasPrefix(strings.ToLower(trimmed), deletePrefix) {
+		return PrepareSyntaxError
+	}
+
+	body := strings.TrimSpace(trimmed[len(deletePrefix):])
+	if body == "" {
+		return PrepareSyntaxError
+	}
+
+	whereIndex := findSelectWhereIndex(body)
+	tableName := body
+	whereInput := ""
+	if whereIndex >= 0 {
+		tableName = strings.TrimSpace(body[:whereIndex])
+		whereInput = strings.TrimSpace(body[whereIndex+len(" where "):])
+		if whereInput == "" {
+			return PrepareSyntaxError
+		}
+	}
+	tableName = strings.TrimSpace(tableName)
+	if !isIdentifier(tableName) {
+		return PrepareSyntaxError
+	}
+
+	definition, ok := tableDefinition(table, tableName)
+	if !ok {
+		return PrepareSyntaxError
+	}
+
+	resolver := newColumnResolver(definition.Schema, []TableReference{{Name: definition.Schema.Name, Schema: definition.Schema, RootPageNum: definition.RootPageNum}}, false)
+	var where WhereExpression
+	if whereInput != "" {
+		var result PrepareResult
+		where, result = parseWhereExpression(whereInput, resolver)
+		if result != PrepareSuccess {
+			return result
+		}
+	}
+
+	statement.TargetTable = definition.Schema.Name
+	statement.DeleteWhere = where
+	return PrepareSuccess
+}
+
 func parseUpdateAssignments(input string, resolver columnResolver) ([]UpdateAssignment, PrepareResult) {
 	assignmentInputs, ok := splitSQLList(input)
 	if !ok || len(assignmentInputs) == 0 {
@@ -626,6 +678,10 @@ func prepareStatement(input string, statement *Statement, source any) PrepareRes
 
 	if strings.HasPrefix(lowerInput, "update ") {
 		return prepareUpdate(input, statement, table)
+	}
+
+	if strings.HasPrefix(lowerInput, "delete ") {
+		return prepareDelete(input, statement, table)
 	}
 
 	if strings.HasPrefix(strings.ToLower(input), "select") {
@@ -2571,6 +2627,26 @@ func executeUpdate(statement *Statement, table *Table) ExecuteResult {
 	return ExecuteSuccess
 }
 
+func executeDelete(statement *Statement, table *Table) ExecuteResult {
+	definition, ok := tableDefinition(table, statement.TargetTable)
+	if !ok {
+		return ExecuteConstraintViolation
+	}
+	target := tableView(table, definition)
+	rows := readAllRows(target)
+	remainingRows := make([]Row, 0, len(rows))
+
+	for _, row := range rows {
+		if rowMatchesWhere(row, statement.DeleteWhere) {
+			continue
+		}
+		remainingRows = append(remainingRows, row)
+	}
+
+	rebuildTableRows(target, remainingRows)
+	return ExecuteSuccess
+}
+
 func applyUpdateAssignments(row Row, assignments []UpdateAssignment) Row {
 	updated := Row{Values: make(map[string]Value, len(row.Values))}
 	for name, value := range row.Values {
@@ -3477,6 +3553,8 @@ func executeStatement(statement *Statement, table *Table, out io.Writer) Execute
 		return executeSelect(statement, table, out)
 	case StatementUpdate:
 		return executeUpdate(statement, table)
+	case StatementDelete:
+		return executeDelete(statement, table)
 	}
 
 	return ExecuteSuccess
