@@ -18,7 +18,7 @@ type Statement struct {
 	SelectWhere    WhereExpression
 	SelectGroupBy  []Column
 	SelectHaving   HavingExpression
-	SelectOrderBy  *OrderByClause
+	SelectOrderBy  []OrderByClause
 	SelectLimit    *uint32
 	Schema         TableSchema
 }

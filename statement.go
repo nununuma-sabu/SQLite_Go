@@ -540,7 +540,7 @@ type selectClause struct {
 	Where    WhereExpression
 	GroupBy  []Column
 	Having   HavingExpression
-	OrderBy  *OrderByClause
+	OrderBy  []OrderByClause
 	Limit    *uint32
 }
 
@@ -669,7 +669,7 @@ func parseSelectStatement(input string, table *Table) (selectClause, PrepareResu
 	orderByIndex := findSelectOrderByIndex(tableWhereAndOrder)
 	tableAndWhere := tableWhereAndOrder
 	orderByInput := ""
-	var orderBy *OrderByClause
+	var orderBy []OrderByClause
 	if orderByIndex >= 0 {
 		tableAndWhere = strings.TrimSpace(tableWhereAndOrder[:orderByIndex])
 		orderByInput = strings.TrimSpace(tableWhereAndOrder[orderByIndex+len(" order by "):])
@@ -744,11 +744,11 @@ func parseSelectStatement(input string, table *Table) (selectClause, PrepareResu
 		having = expression
 	}
 	if orderByInput != "" {
-		clause, result := parseOrderByClause(orderByInput, resolver)
+		clauses, result := parseOrderByClause(orderByInput, resolver)
 		if result != PrepareSuccess {
 			return selectClause{}, result
 		}
-		orderBy = &clause
+		orderBy = clauses
 	}
 
 	if columnList == "*" {
@@ -1277,30 +1277,40 @@ func parseGroupByClause(input string, resolver columnResolver) ([]Column, Prepar
 	return columns, PrepareSuccess
 }
 
-func parseOrderByClause(input string, resolver columnResolver) (OrderByClause, PrepareResult) {
-	fields := strings.Fields(input)
-	if len(fields) < 1 || len(fields) > 2 {
-		return OrderByClause{}, PrepareSyntaxError
+func parseOrderByClause(input string, resolver columnResolver) ([]OrderByClause, PrepareResult) {
+	orderInputs, ok := splitSQLList(input)
+	if !ok || len(orderInputs) == 0 {
+		return nil, PrepareSyntaxError
 	}
 
-	column, ok := resolver.Column(fields[0])
-	if !ok {
-		return OrderByClause{}, PrepareSyntaxError
-	}
-
-	direction := SortAscending
-	if len(fields) == 2 {
-		switch {
-		case strings.EqualFold(fields[1], "asc"):
-			direction = SortAscending
-		case strings.EqualFold(fields[1], "desc"):
-			direction = SortDescending
-		default:
-			return OrderByClause{}, PrepareSyntaxError
+	clauses := make([]OrderByClause, 0, len(orderInputs))
+	for _, orderInput := range orderInputs {
+		fields := strings.Fields(orderInput)
+		if len(fields) < 1 || len(fields) > 2 {
+			return nil, PrepareSyntaxError
 		}
+
+		column, ok := resolver.Column(fields[0])
+		if !ok {
+			return nil, PrepareSyntaxError
+		}
+
+		direction := SortAscending
+		if len(fields) == 2 {
+			switch {
+			case strings.EqualFold(fields[1], "asc"):
+				direction = SortAscending
+			case strings.EqualFold(fields[1], "desc"):
+				direction = SortDescending
+			default:
+				return nil, PrepareSyntaxError
+			}
+		}
+
+		clauses = append(clauses, OrderByClause{Column: column, Direction: direction})
 	}
 
-	return OrderByClause{Column: column, Direction: direction}, PrepareSuccess
+	return clauses, PrepareSuccess
 }
 
 func parseHavingExpression(input string, resolver columnResolver) (HavingExpression, PrepareResult) {
@@ -2549,8 +2559,8 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 		items = selectItemsFromColumns(columns)
 	}
 	rows := selectRows(statement, table)
-	if statement.SelectOrderBy != nil {
-		sortRows(rows, *statement.SelectOrderBy)
+	if len(statement.SelectOrderBy) > 0 {
+		sortRows(rows, statement.SelectOrderBy)
 	}
 	if len(statement.SelectGroupBy) > 0 || selectItemsContainAggregate(items) {
 		valueRows := aggregateSelectRows(rows, items, statement.SelectGroupBy, statement.SelectHaving)
@@ -3091,13 +3101,19 @@ func joinRows(left Row, leftReference TableReference, right Row, rightReference 
 	return Row{Values: values}
 }
 
-func sortRows(rows []Row, orderBy OrderByClause) {
+func sortRows(rows []Row, orderBy []OrderByClause) {
 	sort.SliceStable(rows, func(i, j int) bool {
-		comparison := compareOrderByValues(rowValue(rows[i], orderBy.Column), rowValue(rows[j], orderBy.Column))
-		if orderBy.Direction == SortDescending {
-			return comparison > 0
+		for _, clause := range orderBy {
+			comparison := compareOrderByValues(rowValue(rows[i], clause.Column), rowValue(rows[j], clause.Column))
+			if comparison == 0 {
+				continue
+			}
+			if clause.Direction == SortDescending {
+				return comparison > 0
+			}
+			return comparison < 0
 		}
-		return comparison < 0
+		return false
 	})
 }
 

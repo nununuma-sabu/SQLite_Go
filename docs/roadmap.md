@@ -16,6 +16,7 @@
 - SELECT拡張:
   - 完了: `where` の比較演算子、`and` / `or`、括弧条件を扱う。
   - 完了: `order by <column> asc|desc` を扱う。
+  - 完了: 複数カラムORDER BY: `order by height desc, name asc` を扱う。
   - 完了: `limit <count>` を扱う。
   - 完了: SELECT句で数値型の四則演算を扱う。
   - 完了: OracleのDUAL表に近い仮想テーブル `dual` を扱う。
@@ -26,7 +27,6 @@
   - 完了: DISTINCTで重複行を除外する。
   - 完了: 表名、カラム名、式の別名を扱う。
   - 完了: 複数の実テーブルを作成・保存し、異なるテーブル同士のJOINを扱う。
-  - 複数カラムORDER BY: `order by height desc, name asc` を扱う。
   - OFFSET: `limit` と組み合わせてページングできるようにする。
 - 更新処理: `update <id> ...` を追加し、既存レコードを書き換える。
 - 削除処理: `delete <id>` を追加し、B-Treeからレコードを取り除けるようにする。

@@ -523,6 +523,35 @@ func TestRunExecutesSelectOrderByAscAndDesc(t *testing.T) {
 	}
 }
 
+func TestRunExecutesSelectOrderByMultipleColumns(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real, team text)",
+		"insert 1 Alice 165.2 Red",
+		"insert 2 Bob 172.4 Blue",
+		"insert 3 Carol 165.2 Blue",
+		"insert 4 Dave 172.4 Red",
+		"SELECT name, height, team FROM people ORDER BY height ASC, team DESC, name ASC;",
+		"SELECT name FROM people ORDER BY height DESC, name DESC LIMIT 3;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name", "height", "team"}, []string{"Alice", "165.2", "Red"}, []string{"Carol", "165.2", "Blue"}, []string{"Dave", "172.4", "Red"}, []string{"Bob", "172.4", "Blue"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"name"}, []string{"Dave"}, []string{"Bob"}, []string{"Carol"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesSelectWhereOrderBy(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table people (id integer primary key, name text, height real)",
@@ -1306,12 +1335,16 @@ func TestRunPrintsSyntaxErrorForInvalidSelectFrom(t *testing.T) {
 		"SELECT * FROM users WHERE id = 1);",
 		"SELECT * FROM users ORDER BY missing;",
 		"SELECT * FROM users ORDER BY id SIDEWAYS;",
+		"SELECT * FROM users ORDER BY id ASC, missing DESC;",
+		"SELECT * FROM users ORDER BY id ASC, username SIDEWAYS;",
 		"SELECT * FROM users LIMIT -1;",
 		"SELECT * FROM users LIMIT 1 2;",
 		".exit",
 	})
 
 	want := strings.Join([]string{
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",

@@ -328,6 +328,7 @@ db >
 
 `order by` で結果を並び替えできます。
 方向は `asc` / `desc` を指定でき、省略時は `asc` です。
+複数カラムをカンマ区切りで指定すると、左から順に並び替え条件として使います。
 
 ```text
 db > select username, email from users order by username desc;
@@ -347,6 +348,15 @@ db > select username from users where id >= 1 order by id asc;
 +----------+
 | bob      |
 +----------+
+Executed.
+db > select username, height from users order by height desc, username asc;
++----------+--------+
+| username | height |
++----------+--------+
+| bob      | 181    |
++----------+--------+
+| alice    | 152.5  |
++----------+--------+
 Executed.
 db >
 ```
