@@ -118,6 +118,7 @@ const (
 	StatementInsert StatementType = iota
 	StatementSelect
 	StatementCreateTable
+	StatementUpdate
 )
 
 // NodeType はB-Treeノードの種類を表す。

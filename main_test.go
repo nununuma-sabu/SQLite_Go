@@ -166,6 +166,126 @@ func TestRunExecutesInsertStatement(t *testing.T) {
 	}
 }
 
+func TestRunExecutesUpdateWithWhere(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text, height real)",
+		"insert 1 Alice 165.2",
+		"insert 2 Bob 172.4",
+		"insert 3 Carol 158.9",
+		"UPDATE people SET name = 'Bobby', height = 180.5 WHERE id = 2;",
+		"UPDATE people SET height = 160 WHERE name = 'Carol' OR (id = 1 AND height < 170);",
+		"SELECT id, name, height FROM people ORDER BY id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name", "height"}, []string{"1", "Alice", "160"}, []string{"2", "Bobby", "180.5"}, []string{"3", "Carol", "160"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesUpdateWithoutWhere(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"insert 2 bob bob@example.com",
+		"UPDATE users SET email = 'updated@example.com';",
+		"SELECT id, username, email FROM users ORDER BY id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username", "email"}, []string{"1", "alice", "updated@example.com"}, []string{"2", "bob", "updated@example.com"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunExecutesUpdatePrimaryKey(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"insert 3 carol carol@example.com",
+		"UPDATE users SET id = 2 WHERE username = 'carol';",
+		"SELECT id, username FROM users ORDER BY id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username"}, []string{"1", "alice"}, []string{"2", "carol"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunRejectsUpdateDuplicatePrimaryKey(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"insert 2 bob bob@example.com",
+		"UPDATE users SET id = 1 WHERE username = 'bob';",
+		"SELECT id, username FROM users ORDER BY id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Error: Duplicate key.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username"}, []string{"1", "alice"}, []string{"2", "bob"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunRejectsUpdateConstraintViolations(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table accounts (id integer primary key, username text unique, email text not null)",
+		"insert 1 alice alice@example.com",
+		"insert 2 bob bob@example.com",
+		"UPDATE accounts SET username = alice WHERE id = 2;",
+		"UPDATE accounts SET email = null WHERE id = 2;",
+		"SELECT id, username, email FROM accounts ORDER BY id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Error: Constraint violation.",
+		"db > Error: Constraint violation.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username", "email"}, []string{"1", "alice", "alice@example.com"}, []string{"2", "bob", "bob@example.com"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunSQLScriptExecutesSemicolonSeparatedStatements(t *testing.T) {
 	got := runTempSQLScript(t, `
 -- setup
@@ -1399,6 +1519,35 @@ func TestRunPrintsSyntaxErrorForInvalidSelectFrom(t *testing.T) {
 	}
 }
 
+func TestRunPrintsSyntaxErrorForInvalidUpdate(t *testing.T) {
+	got := runTempScript(t, []string{
+		"UPDATE missing SET username = bob;",
+		"UPDATE users username = bob;",
+		"UPDATE users SET;",
+		"UPDATE users SET missing = bob;",
+		"UPDATE users SET username;",
+		"UPDATE users SET username = bob, username = carol;",
+		"UPDATE users SET username = bob WHERE missing = 1;",
+		"UPDATE users SET id = -1 WHERE username = bob;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Primary key must be positive.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesStatementWithSurroundingSpaces(t *testing.T) {
 	got := runTempScript(t, []string{
 		" insert 1 alice alice@example.com ",
@@ -1563,6 +1712,24 @@ func TestRunPrintsErrorForTooLongStrings(t *testing.T) {
 	}, "\n")
 	if got != want {
 		t.Fatalf("expected output %q, got %q", want, got)
+	}
+
+	got = runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"UPDATE users SET username = " + longUsername + " WHERE id = 1;",
+		"select username from users",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > String is too long.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"username"}, []string{"alice"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want = strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected update output %q, got %q", want, got)
 	}
 }
 

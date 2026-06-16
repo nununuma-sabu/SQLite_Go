@@ -4,24 +4,32 @@ import "os"
 
 // Statement はパース済みの命令を表す。
 type Statement struct {
-	Type           StatementType
-	TargetTable    string
-	RowToInsert    Row
-	ReplaceTable   bool
-	SelectByKey    *uint32
-	SelectColumns  []Column
-	SelectItems    []SelectItem
-	SelectDistinct bool
-	SelectFromDual bool
-	SelectSource   TableReference
-	SelectJoin     *JoinClause
-	SelectWhere    WhereExpression
-	SelectGroupBy  []Column
-	SelectHaving   HavingExpression
-	SelectOrderBy  []OrderByClause
-	SelectLimit    *uint32
-	SelectOffset   *uint32
-	Schema         TableSchema
+	Type              StatementType
+	TargetTable       string
+	RowToInsert       Row
+	UpdateAssignments []UpdateAssignment
+	UpdateWhere       WhereExpression
+	ReplaceTable      bool
+	SelectByKey       *uint32
+	SelectColumns     []Column
+	SelectItems       []SelectItem
+	SelectDistinct    bool
+	SelectFromDual    bool
+	SelectSource      TableReference
+	SelectJoin        *JoinClause
+	SelectWhere       WhereExpression
+	SelectGroupBy     []Column
+	SelectHaving      HavingExpression
+	SelectOrderBy     []OrderByClause
+	SelectLimit       *uint32
+	SelectOffset      *uint32
+	Schema            TableSchema
+}
+
+// UpdateAssignment はUPDATEのSET句に指定された1カラム分の更新値を表す。
+type UpdateAssignment struct {
+	Column Column
+	Value  Value
 }
 
 // TableReference はFROM句に現れるテーブル参照を表す。

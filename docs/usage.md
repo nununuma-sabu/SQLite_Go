@@ -389,6 +389,17 @@ Executed.
 db >
 ```
 
+`update` で既存レコードを書き換えできます。
+`where` を指定すると条件に一致した行だけを更新し、省略した場合は全行を更新します。
+
+```text
+db > update users set email = 'new@example.com' where id = 1;
+Executed.
+db > update users set username = bob, email = 'bob@example.com' where id = 2;
+Executed.
+db >
+```
+
 ## メタコマンド
 
 | コマンド | 説明 |

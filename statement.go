@@ -80,6 +80,168 @@ func prepareInsert(input string, statement *Statement, table *Table) PrepareResu
 	return PrepareSuccess
 }
 
+func prepareUpdate(input string, statement *Statement, table *Table) PrepareResult {
+	statement.Type = StatementUpdate
+
+	trimmed := strings.TrimSpace(input)
+	trimmed = strings.TrimSuffix(trimmed, ";")
+	trimmed = strings.TrimSpace(trimmed)
+
+	const updatePrefix = "update "
+	if !strings.HasPrefix(strings.ToLower(trimmed), updatePrefix) {
+		return PrepareSyntaxError
+	}
+
+	body := strings.TrimSpace(trimmed[len(updatePrefix):])
+	setIndex := findTopLevelClauseIndex(body, " set ")
+	if setIndex < 0 {
+		return PrepareSyntaxError
+	}
+
+	tableName := strings.TrimSpace(body[:setIndex])
+	if !isIdentifier(tableName) {
+		return PrepareSyntaxError
+	}
+	definition, ok := tableDefinition(table, tableName)
+	if !ok {
+		return PrepareSyntaxError
+	}
+
+	setWhereInput := strings.TrimSpace(body[setIndex+len(" set "):])
+	if setWhereInput == "" {
+		return PrepareSyntaxError
+	}
+
+	whereIndex := findSelectWhereIndex(setWhereInput)
+	setInput := setWhereInput
+	whereInput := ""
+	if whereIndex >= 0 {
+		setInput = strings.TrimSpace(setWhereInput[:whereIndex])
+		whereInput = strings.TrimSpace(setWhereInput[whereIndex+len(" where "):])
+		if whereInput == "" {
+			return PrepareSyntaxError
+		}
+	}
+	if setInput == "" {
+		return PrepareSyntaxError
+	}
+
+	resolver := newColumnResolver(definition.Schema, []TableReference{{Name: definition.Schema.Name, Schema: definition.Schema, RootPageNum: definition.RootPageNum}}, false)
+	assignments, result := parseUpdateAssignments(setInput, resolver)
+	if result != PrepareSuccess {
+		return result
+	}
+
+	var where WhereExpression
+	if whereInput != "" {
+		where, result = parseWhereExpression(whereInput, resolver)
+		if result != PrepareSuccess {
+			return result
+		}
+	}
+
+	statement.TargetTable = definition.Schema.Name
+	statement.UpdateAssignments = assignments
+	statement.UpdateWhere = where
+	return PrepareSuccess
+}
+
+func parseUpdateAssignments(input string, resolver columnResolver) ([]UpdateAssignment, PrepareResult) {
+	assignmentInputs, ok := splitSQLList(input)
+	if !ok || len(assignmentInputs) == 0 {
+		return nil, PrepareSyntaxError
+	}
+
+	assignments := make([]UpdateAssignment, 0, len(assignmentInputs))
+	assignedColumns := map[string]struct{}{}
+	for _, assignmentInput := range assignmentInputs {
+		columnName, valueInput, ok := splitUpdateAssignment(assignmentInput)
+		if !ok {
+			return nil, PrepareSyntaxError
+		}
+		column, ok := resolver.Column(columnName)
+		if !ok {
+			return nil, PrepareSyntaxError
+		}
+		normalizedName := strings.ToLower(column.Name)
+		if _, exists := assignedColumns[normalizedName]; exists {
+			return nil, PrepareSyntaxError
+		}
+		valueField, ok := parseUpdateValue(valueInput)
+		if !ok {
+			return nil, PrepareSyntaxError
+		}
+		value, result := parseColumnValue(valueField, column)
+		if result != PrepareSuccess {
+			return nil, result
+		}
+
+		assignedColumns[normalizedName] = struct{}{}
+		assignments = append(assignments, UpdateAssignment{Column: column, Value: value})
+	}
+
+	return assignments, PrepareSuccess
+}
+
+func splitUpdateAssignment(input string) (string, string, bool) {
+	index := findTopLevelAssignmentOperator(input)
+	if index < 0 {
+		return "", "", false
+	}
+	columnName := strings.TrimSpace(input[:index])
+	valueInput := strings.TrimSpace(input[index+1:])
+	if columnName == "" || valueInput == "" {
+		return "", "", false
+	}
+
+	return columnName, valueInput, true
+}
+
+func findTopLevelAssignmentOperator(input string) int {
+	inString := false
+	depth := 0
+	for i := 0; i < len(input); i++ {
+		if input[i] == '\'' {
+			if inString && i+1 < len(input) && input[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch input[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return -1
+			}
+		case '=':
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	if inString || depth != 0 {
+		return -1
+	}
+
+	return -1
+}
+
+func parseUpdateValue(input string) (insertField, bool) {
+	fields, ok := parseInsertFields(input)
+	if !ok || len(fields) != 1 {
+		return insertField{}, false
+	}
+
+	return fields[0], true
+}
+
 type insertField struct {
 	Value  string
 	Quoted bool
@@ -460,6 +622,10 @@ func prepareStatement(input string, statement *Statement, source any) PrepareRes
 
 	if strings.HasPrefix(input, "insert") {
 		return prepareInsert(input, statement, table)
+	}
+
+	if strings.HasPrefix(lowerInput, "update ") {
+		return prepareUpdate(input, statement, table)
 	}
 
 	if strings.HasPrefix(strings.ToLower(input), "select") {
@@ -2381,6 +2547,95 @@ func executeInsert(statement *Statement, table *Table) ExecuteResult {
 	return ExecuteSuccess
 }
 
+func executeUpdate(statement *Statement, table *Table) ExecuteResult {
+	definition, ok := tableDefinition(table, statement.TargetTable)
+	if !ok {
+		return ExecuteConstraintViolation
+	}
+	target := tableView(table, definition)
+	rows := readAllRows(target)
+	updatedRows := make([]Row, 0, len(rows))
+
+	for _, row := range rows {
+		if rowMatchesWhere(row, statement.UpdateWhere) {
+			row = applyUpdateAssignments(row, statement.UpdateAssignments)
+		}
+		updatedRows = append(updatedRows, row)
+	}
+
+	if result := validateRowsForUpdate(updatedRows, target.Schema); result != ExecuteSuccess {
+		return result
+	}
+
+	rebuildTableRows(target, updatedRows)
+	return ExecuteSuccess
+}
+
+func applyUpdateAssignments(row Row, assignments []UpdateAssignment) Row {
+	updated := Row{Values: make(map[string]Value, len(row.Values))}
+	for name, value := range row.Values {
+		updated.Values[name] = value
+	}
+	for _, assignment := range assignments {
+		updated.Values[assignment.Column.Name] = assignment.Value
+	}
+
+	return updated
+}
+
+func validateRowsForUpdate(rows []Row, schema TableSchema) ExecuteResult {
+	primaryKeys := map[uint32]struct{}{}
+	uniqueValues := map[string]map[string]struct{}{}
+	for _, column := range schema.Columns {
+		if column.Unique && !column.PrimaryKey {
+			uniqueValues[column.Name] = map[string]struct{}{}
+		}
+	}
+
+	for _, row := range rows {
+		key, ok := rowKey(row, schema)
+		if !ok {
+			return ExecuteConstraintViolation
+		}
+		if _, exists := primaryKeys[key]; exists {
+			return ExecuteDuplicateKey
+		}
+		primaryKeys[key] = struct{}{}
+
+		for _, column := range schema.Columns {
+			value := rowValue(row, column)
+			if (column.NotNull || column.PrimaryKey) && value.StorageClass == StorageNull {
+				return ExecuteConstraintViolation
+			}
+			if !column.Unique || column.PrimaryKey || value.StorageClass == StorageNull {
+				continue
+			}
+			key := valueKey(value)
+			values := uniqueValues[column.Name]
+			if _, exists := values[key]; exists {
+				return ExecuteConstraintViolation
+			}
+			values[key] = struct{}{}
+		}
+	}
+
+	return ExecuteSuccess
+}
+
+func rebuildTableRows(table *Table, rows []Row) {
+	rootNode := getPage(table.Pager, table.RootPageNum)
+	clear(rootNode)
+	initializeLeafNode(rootNode)
+	setNodeRoot(rootNode, true)
+
+	for _, row := range rows {
+		result := executeInsert(&Statement{Type: StatementInsert, TargetTable: table.Schema.Name, RowToInsert: row}, table)
+		if result != ExecuteSuccess {
+			panic("validated update rows failed to reinsert")
+		}
+	}
+}
+
 func violatesUniqueConstraint(row Row, table *Table) bool {
 	for _, column := range table.Schema.Columns {
 		if !column.Unique || column.PrimaryKey {
@@ -3220,6 +3475,8 @@ func executeStatement(statement *Statement, table *Table, out io.Writer) Execute
 		return executeInsert(statement, table)
 	case StatementSelect:
 		return executeSelect(statement, table, out)
+	case StatementUpdate:
+		return executeUpdate(statement, table)
 	}
 
 	return ExecuteSuccess
