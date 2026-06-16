@@ -411,6 +411,17 @@ Executed.
 db >
 ```
 
+`alter table ... add column` で既存テーブルにカラムを追加できます。
+既存レコードの追加カラムは `NULL` として扱います。
+
+```text
+db > alter table users add column age integer;
+Executed.
+db > update users set age = 30 where id = 1;
+Executed.
+db >
+```
+
 ## メタコマンド
 
 | コマンド | 説明 |

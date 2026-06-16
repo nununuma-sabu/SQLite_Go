@@ -1678,6 +1678,31 @@ func TestRunPrintsSyntaxErrorForInvalidDelete(t *testing.T) {
 	}
 }
 
+func TestRunRejectsInvalidAlterTable(t *testing.T) {
+	got := runTempScript(t, []string{
+		"ALTER TABLE missing ADD COLUMN age integer;",
+		"ALTER TABLE users ADD age integer;",
+		"ALTER TABLE users ADD COLUMN id integer;",
+		"ALTER TABLE users ADD COLUMN;",
+		"ALTER TABLE users ADD COLUMN code integer primary key;",
+		"ALTER TABLE users ADD COLUMN code text not null;",
+		".exit",
+	})
+
+	want := strings.Join([]string{
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Error: Constraint violation.",
+		"db > Error: Constraint violation.",
+		"db > ",
+	}, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesStatementWithSurroundingSpaces(t *testing.T) {
 	got := runTempScript(t, []string{
 		" insert 1 alice alice@example.com ",
@@ -1896,6 +1921,63 @@ func TestRunCreatesTableAndUsesCustomSchema(t *testing.T) {
 		"db > Executed.",
 	}
 	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name", "height", "weight"}, []string{"1", "Alice", "165.2", "54.3"}, []string{"2", "Bob", "172.4", "68.1"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunAltersTableAddColumn(t *testing.T) {
+	got := runTempScript(t, []string{
+		"create table people (id integer primary key, name text)",
+		"insert 1 Alice",
+		"ALTER TABLE people ADD COLUMN height real;",
+		".schema",
+		"SELECT id, name, height FROM people;",
+		"UPDATE people SET height = 165.2 WHERE id = 1;",
+		"insert 2 Bob 172.4",
+		"SELECT id, name, height FROM people ORDER BY id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > create table people (id integer primary key, name text, height real)",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name", "height"}, []string{"1", "Alice", "NULL"})...)
+	wantLines = append(wantLines, "Executed.", "db > Executed.", "db > Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "name", "height"}, []string{"1", "Alice", "165.2"}, []string{"2", "Bob", "172.4"})...)
+	wantLines = append(wantLines, "Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
+func TestRunPersistsAlterTableAddColumn(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	runScript(t, dbPath, []string{
+		"insert 1 alice alice@example.com",
+		"ALTER TABLE users ADD COLUMN age integer;",
+		"UPDATE users SET age = 30 WHERE id = 1;",
+		".exit",
+	})
+
+	got := runScript(t, dbPath, []string{
+		".schema",
+		"insert 2 bob bob@example.com 40",
+		"SELECT id, username, age FROM users ORDER BY id ASC;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > create table users (id INTEGER, username TEXT, email TEXT, age integer)",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"id", "username", "age"}, []string{"1", "alice", "30"}, []string{"2", "bob", "40"})...)
 	wantLines = append(wantLines, "Executed.", "db > ")
 	want := strings.Join(wantLines, "\n")
 	if got != want {

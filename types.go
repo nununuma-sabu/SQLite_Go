@@ -10,6 +10,7 @@ type Statement struct {
 	UpdateAssignments []UpdateAssignment
 	UpdateWhere       WhereExpression
 	DeleteWhere       WhereExpression
+	AlterColumn       Column
 	ReplaceTable      bool
 	SelectByKey       *uint32
 	SelectColumns     []Column

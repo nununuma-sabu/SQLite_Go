@@ -30,7 +30,7 @@
   - 完了: 複数の実テーブルを作成・保存し、異なるテーブル同士のJOINを扱う。
 - 完了: 更新処理: `update <table> set <column> = <value> where ...` で既存レコードを書き換える。
 - 完了: 削除処理: `delete from <table> where ...` で既存レコードを削除する。
-- スキーマ変更: `ALTER TABLE` や既存データを持つテーブルのスキーマ変更を扱う。
+- 完了: スキーマ変更: `alter table <table> add column <column> <type>` で既存テーブルへNULL許容カラムを追加する。
 - 複合主キー: 複数カラムをキーとして比較・保存できるようにする。
 - DEFAULT/CHECK: カラム制約とテーブル制約の実行時検査を増やす。
 - インデックス: `UNIQUE` や検索用のセカンダリB-Treeを実装する。

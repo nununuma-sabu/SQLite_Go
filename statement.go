@@ -25,6 +25,58 @@ func prepareCreateTable(input string, statement *Statement) PrepareResult {
 	return PrepareSuccess
 }
 
+func prepareAlterTable(input string, statement *Statement, table *Table) PrepareResult {
+	trimmed := strings.TrimSpace(input)
+	trimmed = strings.TrimSuffix(trimmed, ";")
+	trimmed = strings.TrimSpace(trimmed)
+
+	const alterPrefix = "alter table "
+	if !strings.HasPrefix(strings.ToLower(trimmed), alterPrefix) {
+		return PrepareSyntaxError
+	}
+
+	body := strings.TrimSpace(trimmed[len(alterPrefix):])
+	addColumnIndex := findTopLevelClauseIndex(body, " add column ")
+	if addColumnIndex < 0 {
+		return PrepareSyntaxError
+	}
+
+	tableName := strings.TrimSpace(body[:addColumnIndex])
+	if !isIdentifier(tableName) {
+		return PrepareSyntaxError
+	}
+	definition, ok := tableDefinition(table, tableName)
+	if !ok {
+		return PrepareSyntaxError
+	}
+
+	columnInput := strings.TrimSpace(body[addColumnIndex+len(" add column "):])
+	column, ok := parseColumnDefinition(columnInput)
+	if !ok {
+		return PrepareSyntaxError
+	}
+	if _, exists := definition.Schema.Column(column.Name); exists {
+		return PrepareSyntaxError
+	}
+	if column.PrimaryKey || column.NotNull {
+		return PrepareConstraintViolation
+	}
+
+	updatedSchema := definition.Schema
+	updatedSchema.Columns = append(append([]Column(nil), updatedSchema.Columns...), column)
+	if !updatedSchema.IsUsable() {
+		return PrepareSyntaxError
+	}
+	if updatedSchema.SerializedRowSize() > leafNodeMaxPayloadSize {
+		return PrepareRowTooLarge
+	}
+
+	statement.Type = StatementAlterTable
+	statement.TargetTable = definition.Schema.Name
+	statement.AlterColumn = column
+	return PrepareSuccess
+}
+
 // insert入力をRow付きのステートメントへ変換する。
 func prepareInsert(input string, statement *Statement, table *Table) PrepareResult {
 	statement.Type = StatementInsert
@@ -670,6 +722,10 @@ func prepareStatement(input string, statement *Statement, source any) PrepareRes
 	lowerInput := strings.ToLower(input)
 	if strings.HasPrefix(lowerInput, "create table") || strings.HasPrefix(lowerInput, "create or replace table") {
 		return prepareCreateTable(input, statement)
+	}
+
+	if strings.HasPrefix(lowerInput, "alter table ") {
+		return prepareAlterTable(input, statement, table)
 	}
 
 	if strings.HasPrefix(input, "insert") {
@@ -2647,6 +2703,17 @@ func executeDelete(statement *Statement, table *Table) ExecuteResult {
 	return ExecuteSuccess
 }
 
+func executeAlterTable(statement *Statement, table *Table) ExecuteResult {
+	definition, ok := tableDefinition(table, statement.TargetTable)
+	if !ok {
+		return ExecuteConstraintViolation
+	}
+	definition.Schema.Columns = append(append([]Column(nil), definition.Schema.Columns...), statement.AlterColumn)
+	setTableDefinition(table, definition)
+	table.HasMetadata = true
+	return ExecuteSuccess
+}
+
 func applyUpdateAssignments(row Row, assignments []UpdateAssignment) Row {
 	updated := Row{Values: make(map[string]Value, len(row.Values))}
 	for name, value := range row.Values {
@@ -3555,6 +3622,8 @@ func executeStatement(statement *Statement, table *Table, out io.Writer) Execute
 		return executeUpdate(statement, table)
 	case StatementDelete:
 		return executeDelete(statement, table)
+	case StatementAlterTable:
+		return executeAlterTable(statement, table)
 	}
 
 	return ExecuteSuccess

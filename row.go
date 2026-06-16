@@ -185,25 +185,58 @@ func deserializeRecordRow(source []byte, schema TableSchema) Row {
 	offset := len(rowRecordFormatMagic)
 	for _, column := range schema.Columns {
 		value := Value{}
+		if offset >= len(source) {
+			row.Values[column.Name] = Value{StorageClass: StorageNull}
+			continue
+		}
 		value.StorageClass = StorageClass(source[offset])
 		offset++
 
 		switch value.StorageClass {
 		case StorageNull:
 		case StorageInteger:
+			if offset+idSize > len(source) {
+				row.Values[column.Name] = Value{StorageClass: StorageNull}
+				offset = len(source)
+				continue
+			}
 			value.Integer = int64(binary.LittleEndian.Uint32(source[offset : offset+idSize]))
 			offset += idSize
 		case StorageReal:
+			if offset+8 > len(source) {
+				row.Values[column.Name] = Value{StorageClass: StorageNull}
+				offset = len(source)
+				continue
+			}
 			value.Real = math.Float64frombits(binary.LittleEndian.Uint64(source[offset : offset+8]))
 			offset += 8
 		case StorageText:
+			if offset >= len(source) {
+				row.Values[column.Name] = Value{StorageClass: StorageNull}
+				continue
+			}
 			length := int(source[offset])
 			offset++
+			if offset+length > len(source) {
+				row.Values[column.Name] = Value{StorageClass: StorageNull}
+				offset = len(source)
+				continue
+			}
 			value.Text = string(source[offset : offset+length])
 			offset += length
 		case StorageBlob:
+			if offset+4 > len(source) {
+				row.Values[column.Name] = Value{StorageClass: StorageNull}
+				offset = len(source)
+				continue
+			}
 			length := int(binary.LittleEndian.Uint32(source[offset : offset+4]))
 			offset += 4
+			if offset+length > len(source) {
+				row.Values[column.Name] = Value{StorageClass: StorageNull}
+				offset = len(source)
+				continue
+			}
 			value.Blob = append([]byte(nil), source[offset:offset+length]...)
 			offset += length
 		}
