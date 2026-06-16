@@ -1,11 +1,13 @@
 package main
 
-// 空きページ番号を返す。ページ再利用はまだ実装しないため末尾に追加する。
+// getUnusedPageNum は新規ページとして使えるページ番号を返す。
+// 現在はfree listを持たないため、PagerのNumPagesをそのまま返す。
 func getUnusedPageNum(pager *Pager) uint32 {
 	return pager.NumPages
 }
 
-// root leaf nodeの分割後、新しいinternal rootを作る。
+// createNewRoot はroot leaf nodeの分割後、新しいinternal rootを作る。
+// rightChildPageNumは分割で作られた右側ノードで、既存rootは左側子としてコピーされる。
 func createNewRoot(table *Table, rightChildPageNum uint32) {
 	root := getPage(table.Pager, table.RootPageNum)
 	rightChild := getPage(table.Pager, rightChildPageNum)
@@ -107,7 +109,8 @@ func internalNodeSplitAndInsert(table *Table, parentPageNum uint32, childPageNum
 	}
 }
 
-// childに対応するchild/keyペアをparent internal nodeへ追加する。
+// internalNodeInsert はinternal nodeへ子ページ参照を追加する。
+// parentPageNumが挿入先、childPageNumが追加する子で、必要に応じてinternal nodeを分割する。
 func internalNodeInsert(table *Table, parentPageNum uint32, childPageNum uint32) {
 	parent := getPage(table.Pager, parentPageNum)
 	child := getPage(table.Pager, childPageNum)
@@ -146,7 +149,8 @@ func internalNodeInsert(table *Table, parentPageNum uint32, childPageNum uint32)
 	setNodeParent(child, parentPageNum)
 }
 
-// 満杯のleaf nodeを左右に分割し、新しいキーとRowも正しい側へ挿入する。
+// leafNodeSplitAndInsert は満杯のleaf nodeを左右に分割し、新しいキーとRowも正しい側へ挿入する。
+// cursorが分割対象位置、key/valueが新規挿入行で、親ノードのキー更新も行う。
 func leafNodeSplitAndInsert(cursor *Cursor, key uint32, value Row) {
 	oldNode := getPage(cursor.Table.Pager, cursor.PageNum)
 	oldMax := getNodeMaxKey(cursor.Table.Pager, oldNode)
@@ -215,7 +219,8 @@ func leafNodeCells(pager *Pager, node []byte) []leafCell {
 	return cells
 }
 
-// leaf nodeへキーとRowを挿入する。
+// leafNodeInsert はleaf nodeへキーとRowを挿入する。
+// 空きが足りない場合はleafNodeSplitAndInsertへ委譲し、戻り値は持たない。
 func leafNodeInsert(cursor *Cursor, key uint32, value Row) {
 	node := getPage(cursor.Table.Pager, cursor.PageNum)
 	numCells := leafNodeNumCells(node)

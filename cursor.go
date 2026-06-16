@@ -2,7 +2,8 @@ package main
 
 import "fmt"
 
-// テーブルの先頭を指すカーソルを作る。
+// tableStart はテーブルの先頭行を指すCursorを作成する。
+// 戻り値は空テーブルの場合EndOfTable=trueになる。
 func tableStart(table *Table) *Cursor {
 	cursor := tableFind(table, 0)
 	node := getPage(table.Pager, cursor.PageNum)
@@ -11,7 +12,8 @@ func tableStart(table *Table) *Cursor {
 	return cursor
 }
 
-// テーブル末尾、つまり最後の行の1つ後ろを指すカーソルを作る。
+// tableEnd はテーブル末尾、つまり挿入位置として使えるCursorを作成する。
+// 戻り値は常にEndOfTable=trueで、末尾セル番号を保持する。
 func tableEnd(table *Table) *Cursor {
 	rootNode := getPage(table.Pager, table.RootPageNum)
 	return &Cursor{
@@ -22,7 +24,8 @@ func tableEnd(table *Table) *Cursor {
 	}
 }
 
-// 指定キーの位置を返す。存在しない場合は挿入すべき位置を返す。
+// tableFind は主キーkeyを検索し、見つかった位置または挿入すべき位置のCursorを返す。
+// B-Treeのrootがleaf/internalのどちらでも適切な探索関数へ委譲する。
 func tableFind(table *Table, key uint32) *Cursor {
 	rootPageNum := table.RootPageNum
 	rootNode := getPage(table.Pager, rootPageNum)
@@ -102,13 +105,15 @@ func leafNodeFind(table *Table, pageNum uint32, key uint32) *Cursor {
 	return cursor
 }
 
-// カーソルが指している行の保存領域を返す。
+// cursorValue はCursorが指すセルのペイロード領域を返す。
+// 戻り値はシリアライズ済みRowのバイト列で、deserializeRowの入力になる。
 func cursorValue(cursor *Cursor) []byte {
 	page := getPage(cursor.Table.Pager, cursor.PageNum)
 	return leafNodeValue(cursor.Table.Pager, page, cursor.CellNum)
 }
 
-// カーソルを次の行へ進める。
+// cursorAdvance はCursorを次の行へ進める。
+// leaf末尾に到達した場合は右隣leafへ移動し、次ページがなければEndOfTable=trueにする。
 func cursorAdvance(cursor *Cursor) {
 	node := getPage(cursor.Table.Pager, cursor.PageNum)
 	cursor.CellNum++

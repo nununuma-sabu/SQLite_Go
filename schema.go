@@ -99,6 +99,7 @@ type RowLayout struct {
 }
 
 // NewColumn は宣言型からSQLite風の型アフィニティを推定してカラム定義を作る。
+// nameがカラム名、declaredTypeがSQL上の型名で、戻り値は制約未設定のColumn。
 func NewColumn(name string, declaredType string) Column {
 	column := Column{
 		Name:         name,
@@ -112,7 +113,8 @@ func NewColumn(name string, declaredType string) Column {
 	return column
 }
 
-// DefaultTableSchema は現在の固定Row実装に対応するスキーマを返す。
+// DefaultTableSchema はデフォルトのusersテーブルスキーマを返す。
+// 戻り値はid/username/emailを持ち、既存テストと旧DB互換の基準スキーマとして使う。
 func DefaultTableSchema() TableSchema {
 	return TableSchema{
 		Name: defaultTableName,
@@ -139,10 +141,14 @@ func DefaultTableSchema() TableSchema {
 	}
 }
 
+// normalizeTableName はテーブル名をメタデータ検索用に正規化する。
+// 戻り値は前後空白を除いた小文字文字列。
 func normalizeTableName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
+// metadataTables はDBメタデータのテーブル一覧を名前検索用mapへ変換する。
+// 戻り値のキーはnormalizeTableNameで正規化したテーブル名。
 func metadataTables(metadata databaseMetadata) map[string]TableDefinition {
 	tables := make(map[string]TableDefinition, len(metadata.Tables))
 	for _, definition := range metadata.Tables {
@@ -152,6 +158,8 @@ func metadataTables(metadata databaseMetadata) map[string]TableDefinition {
 	return tables
 }
 
+// tableDefinitions はTableが管理する全テーブル定義を安定した順序のスライスへ変換する。
+// 戻り値はメタデータ保存時にJSON化される。
 func tableDefinitions(table *Table) []TableDefinition {
 	definitions := make([]TableDefinition, 0, len(table.Tables))
 	for _, definition := range table.Tables {
@@ -164,11 +172,15 @@ func tableDefinitions(table *Table) []TableDefinition {
 	return definitions
 }
 
+// tableDefinition は名前からテーブル定義を取得する。
+// 戻り値のboolは、指定名のテーブルが管理対象に存在する場合だけtrueになる。
 func tableDefinition(table *Table, name string) (TableDefinition, bool) {
 	definition, ok := table.Tables[normalizeTableName(name)]
 	return definition, ok
 }
 
+// setTableDefinition はテーブル定義を登録または更新する。
+// table.Schemaとtable.RootPageNumも同じ定義へ同期し、直近操作対象として扱えるようにする。
 func setTableDefinition(table *Table, definition TableDefinition) {
 	if table.Tables == nil {
 		table.Tables = map[string]TableDefinition{}
@@ -178,6 +190,8 @@ func setTableDefinition(table *Table, definition TableDefinition) {
 	table.RootPageNum = definition.RootPageNum
 }
 
+// tableView は同じPagerを共有しつつ、指定テーブル定義を操作対象にした軽量Tableを返す。
+// 戻り値は複数テーブル環境でINSERT/SELECT/UPDATE/DELETE対象を切り替えるために使う。
 func tableView(table *Table, definition TableDefinition) *Table {
 	return &Table{
 		Pager:       table.Pager,
@@ -188,6 +202,8 @@ func tableView(table *Table, definition TableDefinition) *Table {
 	}
 }
 
+// Column はスキーマから名前一致するカラムを取得する。
+// 戻り値のboolは、大文字小文字を無視して一致するカラムがある場合にtrueになる。
 func (schema TableSchema) Column(name string) (Column, bool) {
 	for _, column := range schema.Columns {
 		if strings.EqualFold(column.Name, name) {
@@ -198,6 +214,8 @@ func (schema TableSchema) Column(name string) (Column, bool) {
 	return Column{}, false
 }
 
+// PrimaryKeyColumn はスキーマ内の主キーカラムを返す。
+// 戻り値のboolは主キーが定義されている場合にtrueになる。
 func (schema TableSchema) PrimaryKeyColumn() (Column, bool) {
 	for _, column := range schema.Columns {
 		if column.PrimaryKey {
@@ -208,6 +226,8 @@ func (schema TableSchema) PrimaryKeyColumn() (Column, bool) {
 	return Column{}, false
 }
 
+// IsUsable はスキーマが現在のエンジンで扱える形か検査する。
+// 戻り値はテーブル名、重複列、型、単一INTEGER主キーの条件を満たす場合にtrueになる。
 func (schema TableSchema) IsUsable() bool {
 	if strings.TrimSpace(schema.Name) == "" || len(schema.Columns) == 0 {
 		return false
@@ -238,6 +258,8 @@ func (schema TableSchema) IsUsable() bool {
 	return primaryKeyCount == 1
 }
 
+// CreateStatement はスキーマを.schema表示用のCREATE TABLE文へ変換する。
+// 戻り値は保存済み制約のうち現在表示対応しているものを含むSQL文字列。
 func (schema TableSchema) CreateStatement() string {
 	columnDefinitions := make([]string, 0, len(schema.Columns))
 	for _, column := range schema.Columns {
@@ -257,6 +279,8 @@ func (schema TableSchema) CreateStatement() string {
 	return "create table " + schema.Name + " (" + strings.Join(columnDefinitions, ", ") + ")"
 }
 
+// SerializedRowSize はスキーマ上の最大シリアライズサイズを返す。
+// 戻り値はページ内に行が収まるかを事前判定するために使う。
 func (schema TableSchema) SerializedRowSize() uint32 {
 	size := uint32(len(rowRecordFormatMagic))
 	for _, column := range schema.Columns {
@@ -266,6 +290,8 @@ func (schema TableSchema) SerializedRowSize() uint32 {
 	return size
 }
 
+// RowLayout は旧固定長形式を読むための列オフセット情報を作る。
+// 戻り値は列名ごとの開始位置、サイズ、全体サイズを持つ。
 func (schema TableSchema) RowLayout() RowLayout {
 	layout := RowLayout{
 		ColumnOffsets: make(map[string]uint32, len(schema.Columns)),
@@ -320,6 +346,8 @@ func (column Column) SerializedSize() uint32 {
 	return 1 + column.StorageSize()
 }
 
+// ValidateBlobValue はBLOB値がカラム制約上保存可能か判定する。
+// 戻り値は最大長制約がない、または制約以内の場合にtrueになる。
 func (column Column) ValidateBlobValue(value []byte) bool {
 	if column.Affinity != AffinityBlob {
 		return false
@@ -331,6 +359,8 @@ func (column Column) ValidateBlobValue(value []byte) bool {
 	return uint32(len(value)) <= column.MaxLength
 }
 
+// ValidateIntegerValue はINTEGER値がカラム制約上保存可能か判定する。
+// 主キー列では正のuint32範囲に収まる場合だけtrueを返す。
 func (column Column) ValidateIntegerValue(value int64) bool {
 	if column.Affinity != AffinityInteger {
 		return false
@@ -342,6 +372,8 @@ func (column Column) ValidateIntegerValue(value int64) bool {
 	return true
 }
 
+// ValidateTextValue はTEXT値がカラムの最大長制約を満たすか判定する。
+// 戻り値は最大長制約がない、または文字列長が制約以内の場合にtrueになる。
 func (column Column) ValidateTextValue(value string) bool {
 	if column.Affinity != AffinityText {
 		return false
@@ -354,6 +386,8 @@ func (column Column) ValidateTextValue(value string) bool {
 }
 
 // InferTypeAffinity はSQLiteの型名解釈に近い順序で型アフィニティを推定する。
+// InferTypeAffinity はSQLの宣言型名からSQLite風の型アフィニティを推定する。
+// 戻り値はINTEGER/REAL/TEXT/BLOB/NUMERICのいずれか。
 func InferTypeAffinity(declaredType string) TypeAffinity {
 	normalized := strings.ToUpper(strings.TrimSpace(declaredType))
 	if normalized == "" {

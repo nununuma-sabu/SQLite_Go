@@ -10,6 +10,9 @@ import (
 	"unicode"
 )
 
+// prepareCreateTable はCREATE TABLE文を解析し、実行用Statementへ格納する。
+// inputにはユーザー入力のSQL全体を渡し、statementには解析結果のスキーマと置換指定を書き込む。
+// 戻り値は解析成功、構文エラー、行サイズ超過などの準備段階の結果を表す。
 func prepareCreateTable(input string, statement *Statement) PrepareResult {
 	schema, replace, ok := parseCreateTableStatement(input)
 	if !ok {
@@ -25,6 +28,9 @@ func prepareCreateTable(input string, statement *Statement) PrepareResult {
 	return PrepareSuccess
 }
 
+// prepareAlterTable はALTER TABLE ... ADD COLUMN文を解析する。
+// tableから対象テーブルの現スキーマを参照し、追加可能なNULL許容カラムだけをStatementに保持する。
+// 戻り値は対象テーブル・カラム定義・制約の検査結果をPrepareResultで返す。
 func prepareAlterTable(input string, statement *Statement, table *Table) PrepareResult {
 	trimmed := strings.TrimSpace(input)
 	trimmed = strings.TrimSuffix(trimmed, ";")
@@ -77,7 +83,9 @@ func prepareAlterTable(input string, statement *Statement, table *Table) Prepare
 	return PrepareSuccess
 }
 
-// insert入力をRow付きのステートメントへ変換する。
+// prepareInsert はINSERT入力をRow付きのステートメントへ変換する。
+// inputをトークン化し、tableに登録された対象スキーマへ合わせて各値をValueへ変換する。
+// 戻り値は構文、型、制約、サイズの検査結果を表す。
 func prepareInsert(input string, statement *Statement, table *Table) PrepareResult {
 	statement.Type = StatementInsert
 
@@ -132,6 +140,9 @@ func prepareInsert(input string, statement *Statement, table *Table) PrepareResu
 	return PrepareSuccess
 }
 
+// prepareUpdate はUPDATE文を解析し、SET句とWHERE句をStatementへ格納する。
+// tableは対象テーブルの存在確認とカラム解決に使う。
+// 戻り値はSET句の値変換、WHERE条件解析、対象テーブル検査の結果を表す。
 func prepareUpdate(input string, statement *Statement, table *Table) PrepareResult {
 	statement.Type = StatementUpdate
 
@@ -198,6 +209,9 @@ func prepareUpdate(input string, statement *Statement, table *Table) PrepareResu
 	return PrepareSuccess
 }
 
+// prepareDelete はDELETE FROM文を解析し、対象テーブルとWHERE句をStatementへ格納する。
+// WHERE句が省略された場合はゼロ値のWhereExpressionを保持し、実行時に全行削除として扱う。
+// 戻り値は対象テーブルやWHERE条件の解析結果を表す。
 func prepareDelete(input string, statement *Statement, table *Table) PrepareResult {
 	statement.Type = StatementDelete
 
@@ -250,6 +264,9 @@ func prepareDelete(input string, statement *Statement, table *Table) PrepareResu
 	return PrepareSuccess
 }
 
+// parseUpdateAssignments はUPDATEのSET句を複数代入へ分解する。
+// inputは "name = 'Alice', height = 160" のようなSET句本体で、resolverはカラム名解決に使う。
+// 戻り値は更新カラムと値の一覧、または構文・制約エラーを表すPrepareResultを返す。
 func parseUpdateAssignments(input string, resolver columnResolver) ([]UpdateAssignment, PrepareResult) {
 	assignmentInputs, ok := splitSQLList(input)
 	if !ok || len(assignmentInputs) == 0 {
@@ -287,6 +304,8 @@ func parseUpdateAssignments(input string, resolver columnResolver) ([]UpdateAssi
 	return assignments, PrepareSuccess
 }
 
+// splitUpdateAssignment は1つの代入式をカラム名と値文字列へ分割する。
+// 戻り値のboolは、トップレベルの '=' があり左右が空でない場合だけtrueになる。
 func splitUpdateAssignment(input string) (string, string, bool) {
 	index := findTopLevelAssignmentOperator(input)
 	if index < 0 {
@@ -301,6 +320,8 @@ func splitUpdateAssignment(input string) (string, string, bool) {
 	return columnName, valueInput, true
 }
 
+// findTopLevelAssignmentOperator は引用符や括弧の内側を除いて代入用 '=' の位置を探す。
+// 戻り値は見つかったバイト位置で、見つからない場合や括弧が壊れている場合は-1を返す。
 func findTopLevelAssignmentOperator(input string) int {
 	inString := false
 	depth := 0
@@ -337,6 +358,8 @@ func findTopLevelAssignmentOperator(input string) int {
 	return -1
 }
 
+// parseUpdateValue はUPDATEの右辺値をINSERTと同じ値トークンとして解析する。
+// 戻り値のboolは、右辺が単一の値として解釈できた場合だけtrueになる。
 func parseUpdateValue(input string) (insertField, bool) {
 	fields, ok := parseInsertFields(input)
 	if !ok || len(fields) != 1 {
@@ -351,6 +374,8 @@ type insertField struct {
 	Quoted bool
 }
 
+// parseInsertFields は空白区切りの値列を、引用文字列を考慮してinsertFieldへ分解する。
+// 戻り値のboolは、未終端文字列や不正な引用符がない場合だけtrueになる。
 func parseInsertFields(input string) ([]insertField, bool) {
 	fields := []insertField{}
 	for i := 0; i < len(input); {
@@ -387,6 +412,8 @@ func parseInsertFields(input string) ([]insertField, bool) {
 	return fields, true
 }
 
+// parseSQLStringLiteral はstart位置の単一引用符からSQL文字列リテラルを読む。
+// 戻り値は展開済み文字列、リテラル直後の位置、解析成功可否を返す。
 func parseSQLStringLiteral(input string, start int) (string, int, bool) {
 	var builder strings.Builder
 	for i := start + 1; i < len(input); i++ {
@@ -417,6 +444,8 @@ func parseSQLStringLiteral(input string, start int) (string, int, bool) {
 	return "", 0, false
 }
 
+// mysqlEscapedByte はMySQL風のバックスラッシュエスケープを1バイトへ変換する。
+// 戻り値のboolは、既知のエスケープ文字だった場合だけtrueになる。
 func mysqlEscapedByte(value byte) (byte, bool) {
 	switch value {
 	case '\'':
@@ -440,12 +469,15 @@ func mysqlEscapedByte(value byte) (byte, bool) {
 	}
 }
 
-// create table入力からテーブル名とカラム定義を取り出す。
+// parseCreateTable はcreate table入力からテーブル名とカラム定義を取り出す簡易ラッパー。
+// 戻り値のboolは、CREATE TABLEとして正しく解析できた場合だけtrueになる。
 func parseCreateTable(input string) (TableSchema, bool) {
 	schema, _, ok := parseCreateTableStatement(input)
 	return schema, ok
 }
 
+// parseCreateTableStatement はCREATE TABLE / CREATE OR REPLACE TABLE文を解析する。
+// 戻り値はスキーマ、OR REPLACE指定の有無、解析成功可否の順で返す。
 func parseCreateTableStatement(input string) (TableSchema, bool, bool) {
 	trimmed := strings.TrimSpace(input)
 	lower := strings.ToLower(trimmed)
@@ -527,6 +559,8 @@ func parseCreateTableStatement(input string) (TableSchema, bool, bool) {
 	return schema, replace, true
 }
 
+// applyImplicitIDPrimaryKey は明示PRIMARY KEYがない場合にinteger型id列を主キー扱いにする。
+// columnsは呼び出し元が保持するスライスで、この関数は該当Columnを直接更新する。
 func applyImplicitIDPrimaryKey(columns []Column) {
 	for _, column := range columns {
 		if column.PrimaryKey {
@@ -542,6 +576,8 @@ func applyImplicitIDPrimaryKey(columns []Column) {
 	}
 }
 
+// splitSQLList はカンマ区切りのSQL断片を、引用符や括弧の内側を保ったまま分割する。
+// 戻り値のboolは、空要素や未終端文字列、括弧不整合がない場合だけtrueになる。
 func splitSQLList(input string) ([]string, bool) {
 	items := []string{}
 	start := 0
@@ -609,6 +645,8 @@ func isTableConstraint(definition string) bool {
 		strings.EqualFold(tokens[index], "foreign")
 }
 
+// parseTablePrimaryKeyConstraint はテーブル制約のPRIMARY KEY列名を取り出す。
+// 現時点では単一カラム主キーだけを受け入れ、戻り値のboolで成功可否を返す。
 func parseTablePrimaryKeyConstraint(definition string) (string, bool) {
 	normalized := strings.TrimSpace(definition)
 	tokens := strings.Fields(normalized)
@@ -634,6 +672,8 @@ func parseTablePrimaryKeyConstraint(definition string) (string, bool) {
 	return strings.TrimSpace(columns[0]), true
 }
 
+// parseColumnDefinition は1カラム分の定義文字列をColumnへ変換する。
+// 戻り値のboolは、型名と対応済み制約だけで構成されている場合にtrueになる。
 func parseColumnDefinition(definition string) (Column, bool) {
 	parts := strings.Fields(strings.TrimSpace(definition))
 	if len(parts) < 2 {
@@ -713,7 +753,8 @@ func isConflictResolution(token string) bool {
 		strings.EqualFold(token, "replace")
 }
 
-// 入力文字列を実行可能なステートメントへ変換する。
+// prepareStatement は入力文字列を実行可能なStatementへ変換する入口。
+// sourceには*TableまたはTableSchemaを渡し、戻り値でREPLが表示すべき準備結果を返す。
 func prepareStatement(input string, statement *Statement, source any) PrepareResult {
 	table := statementTable(source)
 	schema := table.Schema
@@ -789,6 +830,8 @@ func prepareStatement(input string, statement *Statement, source any) PrepareRes
 	return PrepareUnrecognizedStatement
 }
 
+// statementTable はprepareStatementが受け取るsourceをTableとして扱える形へ正規化する。
+// sourceがTableSchemaの場合はテスト用の一時Tableを作り、戻り値として返す。
 func statementTable(source any) *Table {
 	switch value := source.(type) {
 	case *Table:
@@ -836,10 +879,14 @@ const (
 	dualColumnValue = "X"
 )
 
+// newColumnResolver はSELECT/WHERE/HAVINGで使うカラム名解決器を生成する。
+// qualifyColumnsがtrueの場合、JOIN時の衝突回避のために行内キーを "alias.column" 形式へ揃える。
 func newColumnResolver(schema TableSchema, references []TableReference, qualifyColumns bool) columnResolver {
 	return columnResolver{Schema: schema, References: references, QualifyColumns: qualifyColumns}
 }
 
+// Column は入力されたカラム名をスキーマ上のColumnへ解決する。
+// 戻り値のboolは、未発見または曖昧な未修飾カラムではfalseになる。
 func (resolver columnResolver) Column(name string) (Column, bool) {
 	qualifier, columnName, qualified := splitQualifiedName(name)
 	if qualified {
@@ -910,6 +957,8 @@ func splitQualifiedName(name string) (string, string, bool) {
 	return qualifier, columnName, true
 }
 
+// parseSelectStatement はFROM句を持つSELECT文を句ごとに解析する。
+// tableはFROM/JOIN対象の実テーブル解決に使い、戻り値は実行に必要なselectClauseと解析結果を返す。
 func parseSelectStatement(input string, table *Table) (selectClause, PrepareResult) {
 	trimmed := strings.TrimSpace(input)
 	trimmed = strings.TrimSuffix(trimmed, ";")
@@ -1093,6 +1142,8 @@ type fromSource struct {
 	Resolver columnResolver
 }
 
+// parseFromSource はSELECTのFROM句を単一テーブル、dual、JOINのいずれかとして解釈する。
+// 戻り値のfromSourceには、SELECT句やWHERE句で使うスキーマとカラム解決器を含める。
 func parseFromSource(input string, table *Table) (fromSource, PrepareResult) {
 	if joinIndex := findSelectJoinIndex(input); joinIndex >= 0 {
 		return parseJoinSource(input, joinIndex, table)
@@ -1128,6 +1179,8 @@ func parseFromSource(input string, table *Table) (fromSource, PrepareResult) {
 	}, PrepareSuccess
 }
 
+// parseJoinSource はINNER JOIN相当のFROM句を左右テーブルとON条件へ分解する。
+// joinIndexはトップレベルのJOIN位置で、戻り値はJOIN用の複合スキーマとON条件を含む。
 func parseJoinSource(input string, joinIndex int, table *Table) (fromSource, PrepareResult) {
 	leftInput := strings.TrimSpace(input[:joinIndex])
 	if strings.HasSuffix(strings.ToLower(leftInput), " inner") {
@@ -1183,6 +1236,8 @@ func parseJoinSource(input string, joinIndex int, table *Table) (fromSource, Pre
 	}, PrepareSuccess
 }
 
+// DualTableSchema はOracleのDUALに相当する1行仮想テーブルのスキーマを返す。
+// 戻り値はSELECT式だけを評価したい場合のFROMソースとして使う。
 func DualTableSchema() TableSchema {
 	return TableSchema{
 		Name: dualTableName,
@@ -1197,6 +1252,8 @@ func DualTableSchema() TableSchema {
 	}
 }
 
+// dualRow はDUAL表の唯一の行を返す。
+// 戻り値のdummy列にはOracle風に "X" を入れる。
 func dualRow() Row {
 	return Row{
 		Values: map[string]Value{
@@ -1208,6 +1265,8 @@ func dualRow() Row {
 	}
 }
 
+// parseTableReference は "table" または "table alias" 形式の参照を解析する。
+// 戻り値のboolは、テーブル名と任意エイリアスが識別子として妥当な場合だけtrueになる。
 func parseTableReference(input string) (TableReference, bool) {
 	fields := strings.Fields(strings.TrimSpace(input))
 	switch len(fields) {
@@ -1228,6 +1287,8 @@ func parseTableReference(input string) (TableReference, bool) {
 	}
 }
 
+// parseSelectItem はSELECT句の1要素を値式と表示ヘッダへ変換する。
+// 戻り値は式、ヘッダ名、式本体文字列、解析結果の順で返す。
 func parseSelectItem(input string, resolver columnResolver) (ValueExpression, string, string, PrepareResult) {
 	input = strings.TrimSpace(input)
 	if input == "" {
@@ -1526,6 +1587,8 @@ func findSelectLimitIndex(body string) int {
 	return -1
 }
 
+// parseLimitClause はLIMIT句本体を件数と任意のOFFSETへ変換する。
+// 戻り値はlimit値、offset値へのポインタ(nilなら未指定)、解析結果を返す。
 func parseLimitClause(input string) (uint32, *uint32, PrepareResult) {
 	fields := strings.Fields(input)
 	if len(fields) != 1 && len(fields) != 3 {
@@ -1553,6 +1616,8 @@ func parseLimitClause(input string) (uint32, *uint32, PrepareResult) {
 	return uint32(limit), offset, PrepareSuccess
 }
 
+// parseGroupByClause はGROUP BY句のカラム一覧を解決済みColumnへ変換する。
+// 戻り値はグループ化カラムの順序付き一覧と解析結果を返す。
 func parseGroupByClause(input string, resolver columnResolver) ([]Column, PrepareResult) {
 	columnNames, ok := splitSQLList(input)
 	if !ok || len(columnNames) == 0 {
@@ -1572,6 +1637,8 @@ func parseGroupByClause(input string, resolver columnResolver) ([]Column, Prepar
 	return columns, PrepareSuccess
 }
 
+// parseOrderByClause はORDER BY句を複数のソート条件へ変換する。
+// 戻り値のスライス順は比較優先順位を表し、各要素にASC/DESCを保持する。
 func parseOrderByClause(input string, resolver columnResolver) ([]OrderByClause, PrepareResult) {
 	orderInputs, ok := splitSQLList(input)
 	if !ok || len(orderInputs) == 0 {
@@ -1608,6 +1675,8 @@ func parseOrderByClause(input string, resolver columnResolver) ([]OrderByClause,
 	return clauses, PrepareSuccess
 }
 
+// parseHavingExpression はHAVING句全体を条件式ツリーへ変換する。
+// 戻り値は集約式を含められるHavingExpressionと解析結果を返す。
 func parseHavingExpression(input string, resolver columnResolver) (HavingExpression, PrepareResult) {
 	input = strings.TrimSpace(input)
 	if input == "" {
@@ -1869,6 +1938,8 @@ func isTopLevelPosition(input string, targetIndex int) bool {
 	return !inString && depth == 0
 }
 
+// parseValueExpression はカラム参照、リテラル、集約関数、四則演算を値式ツリーへ変換する。
+// resolverはカラム参照の解決に使い、戻り値は式ツリーと解析結果を返す。
 func parseValueExpression(input string, resolver columnResolver) (ValueExpression, PrepareResult) {
 	tokens, ok := parseValueExpressionTokens(input)
 	if !ok || len(tokens) == 0 {
@@ -2312,6 +2383,8 @@ func parseNumericLiteral(input string) (Value, bool) {
 	return Value{StorageClass: StorageInteger, Integer: integer}, true
 }
 
+// parseWhereExpression はWHERE句をAND/OR/括弧付きの条件式ツリーへ変換する。
+// 戻り値は行単位で評価できるWhereExpressionと解析結果を返す。
 func parseWhereExpression(input string, resolver columnResolver) (WhereExpression, PrepareResult) {
 	tokens, ok := parseWhereTokens(input)
 	if !ok || len(tokens) == 0 {
@@ -2581,6 +2654,8 @@ func parseWhereOperatorToken(input string, start int) (string, int, bool) {
 	}
 }
 
+// parseColumnValue は文字列トークンをカラム型に合わせたValueへ変換する。
+// fieldには引用済みかどうかも含み、戻り値は変換後Valueと型・制約検査結果を返す。
 func parseColumnValue(field insertField, column Column) (Value, PrepareResult) {
 	if !field.Quoted && strings.EqualFold(field.Value, "null") {
 		if column.NotNull || column.PrimaryKey {
@@ -2627,7 +2702,8 @@ func parseColumnValue(field insertField, column Column) (Value, PrepareResult) {
 	}
 }
 
-// insertステートメントを実行し、B-Tree内の適切な位置へ行を追加する。
+// executeInsert はINSERTステートメントを実行し、B-Tree内の適切な位置へ行を追加する。
+// statementには挿入先テーブル名とRowToInsertが入っている前提で、戻り値は重複キーや制約違反を表す。
 func executeInsert(statement *Statement, table *Table) ExecuteResult {
 	if statement.TargetTable == "" {
 		statement.TargetTable = table.Schema.Name
@@ -2659,6 +2735,9 @@ func executeInsert(statement *Statement, table *Table) ExecuteResult {
 	return ExecuteSuccess
 }
 
+// executeUpdate はUPDATEステートメントを実行する。
+// 対象テーブルの全行を読み、WHEREに一致した行だけSET値を反映し、検査後にB-Treeを再構築する。
+// 戻り値は主キー重複やUNIQUE/NOT NULL違反を含む実行結果を返す。
 func executeUpdate(statement *Statement, table *Table) ExecuteResult {
 	definition, ok := tableDefinition(table, statement.TargetTable)
 	if !ok {
@@ -2683,6 +2762,8 @@ func executeUpdate(statement *Statement, table *Table) ExecuteResult {
 	return ExecuteSuccess
 }
 
+// executeDelete はDELETEステートメントを実行する。
+// WHEREに一致する行を除外した行セットで対象テーブルを再構築し、戻り値で実行結果を返す。
 func executeDelete(statement *Statement, table *Table) ExecuteResult {
 	definition, ok := tableDefinition(table, statement.TargetTable)
 	if !ok {
@@ -2703,6 +2784,8 @@ func executeDelete(statement *Statement, table *Table) ExecuteResult {
 	return ExecuteSuccess
 }
 
+// executeAlterTable はALTER TABLE ADD COLUMNを実行する。
+// メタデータ上のスキーマにカラムを追加し、既存行は読み取り時に不足列をNULLとして扱う。
 func executeAlterTable(statement *Statement, table *Table) ExecuteResult {
 	definition, ok := tableDefinition(table, statement.TargetTable)
 	if !ok {
@@ -2714,6 +2797,8 @@ func executeAlterTable(statement *Statement, table *Table) ExecuteResult {
 	return ExecuteSuccess
 }
 
+// applyUpdateAssignments は1行にUPDATEのSET句を適用した新しいRowを返す。
+// 元のrowは直接変更せず、戻り値としてコピー済みの更新行を返す。
 func applyUpdateAssignments(row Row, assignments []UpdateAssignment) Row {
 	updated := Row{Values: make(map[string]Value, len(row.Values))}
 	for name, value := range row.Values {
@@ -2726,6 +2811,8 @@ func applyUpdateAssignments(row Row, assignments []UpdateAssignment) Row {
 	return updated
 }
 
+// validateRowsForUpdate はUPDATE後の全行がテーブル制約を満たすか検査する。
+// 戻り値は主キー重複、主キー欠落、UNIQUE/NOT NULL違反などのExecuteResultを返す。
 func validateRowsForUpdate(rows []Row, schema TableSchema) ExecuteResult {
 	primaryKeys := map[uint32]struct{}{}
 	uniqueValues := map[string]map[string]struct{}{}
@@ -2765,6 +2852,8 @@ func validateRowsForUpdate(rows []Row, schema TableSchema) ExecuteResult {
 	return ExecuteSuccess
 }
 
+// rebuildTableRows は指定された行セットでテーブルのB-Treeを作り直す。
+// 主キー変更や可変長行のサイズ変更を安全に反映するため、UPDATE/DELETEで共通利用する。
 func rebuildTableRows(table *Table, rows []Row) {
 	rootNode := getPage(table.Pager, table.RootPageNum)
 	clear(rootNode)
@@ -2779,6 +2868,8 @@ func rebuildTableRows(table *Table, rows []Row) {
 	}
 }
 
+// violatesUniqueConstraint は挿入予定の行がUNIQUE制約に違反するか調べる。
+// 戻り値はNULL以外の同値が既存行にある場合にtrueになる。
 func violatesUniqueConstraint(row Row, table *Table) bool {
 	for _, column := range table.Schema.Columns {
 		if !column.Unique || column.PrimaryKey {
@@ -2802,6 +2893,8 @@ func violatesUniqueConstraint(row Row, table *Table) bool {
 	return false
 }
 
+// valuesEqual は2つのValueが等しいかをSQLite風の数値比較を含めて判定する。
+// 戻り値はストレージクラスが違っても数値同士なら数値として等しい場合にtrueになる。
 func valuesEqual(left Value, right Value) bool {
 	if isNumericValue(left) && isNumericValue(right) {
 		return numericValueAsReal(left) == numericValueAsReal(right)
@@ -2826,6 +2919,8 @@ func valuesEqual(left Value, right Value) bool {
 	}
 }
 
+// compareValues はORDER BYや条件評価用に2つのValueを比較する。
+// 戻り値は左<右で負、左=右で0、左>右で正、比較不能な型ではbool=falseを返す。
 func compareValues(left Value, right Value) (int, bool) {
 	if isNumericValue(left) && isNumericValue(right) {
 		leftReal := numericValueAsReal(left)
@@ -2963,7 +3058,9 @@ func tableIsEmpty(table *Table) bool {
 	return leafNodeNumCells(root) == 0
 }
 
-// selectステートメントを実行し、保存済みの全行を出力する。
+// executeSelect はSELECTステートメントを実行し、結果行を表形式で出力する。
+// WHERE、ORDER BY、GROUP BY/HAVING、DISTINCT、LIMIT/OFFSETの順に既存仕様を適用する。
+// 戻り値は常に実行結果を表し、表示対象が0行でもExecuteSuccessになる。
 func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteResult {
 	columns := statement.SelectColumns
 	if len(columns) == 0 {
@@ -3001,6 +3098,8 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	return ExecuteSuccess
 }
 
+// selectItemsContainAggregate はSELECT項目に集約関数が含まれるか判定する。
+// 戻り値はGROUP BYなしの集約SELECTとして扱うべき場合にtrueになる。
 func selectItemsContainAggregate(items []SelectItem) bool {
 	for _, item := range items {
 		if expressionContainsAggregate(item.Expression) {
@@ -3020,6 +3119,8 @@ func selectItemHeaders(items []SelectItem) []string {
 	return headers
 }
 
+// selectValueRows はRow一覧からSELECT項目の値だけを評価した表形式データを作る。
+// 戻り値は出力行ごとのValueスライスで、表示ヘッダは含まない。
 func selectValueRows(rows []Row, items []SelectItem) [][]Value {
 	valueRows := make([][]Value, 0, len(rows))
 	for _, row := range rows {
@@ -3037,6 +3138,8 @@ func selectValueRows(rows []Row, items []SelectItem) [][]Value {
 	return valueRows
 }
 
+// distinctValueRows は表示値が重複する行を取り除く。
+// 戻り値は最初に現れた行の順序を保った重複除去後の行セット。
 func distinctValueRows(rows [][]Value) [][]Value {
 	distinctRows := make([][]Value, 0, len(rows))
 	seen := map[string]struct{}{}
@@ -3061,6 +3164,8 @@ func valueRowKey(row []Value) string {
 	return strings.Join(parts, "\x00")
 }
 
+// aggregateSelectRows はGROUP BYや集約関数を含むSELECT結果を作る。
+// rowsをグループ化し、HAVINGを通ったグループだけをSELECT項目のValue列へ変換して返す。
 func aggregateSelectRows(rows []Row, items []SelectItem, groupBy []Column, having HavingExpression) [][]Value {
 	groups := groupRows(rows, groupBy)
 	valueRows := make([][]Value, 0, len(groups))
@@ -3201,6 +3306,8 @@ func valueKey(value Value) string {
 	}
 }
 
+// pageValueRows はOFFSETで読み飛ばした後にLIMITで件数を制限する。
+// limitがnilの場合はページングなしで元のrowsを返し、offsetが範囲外なら空行セットを返す。
 func pageValueRows(rows [][]Value, limit *uint32, offset *uint32) [][]Value {
 	if limit == nil {
 		return rows
@@ -3221,6 +3328,8 @@ func pageValueRows(rows [][]Value, limit *uint32, offset *uint32) [][]Value {
 	return rows[:*limit]
 }
 
+// evaluateValueExpression は単一行に対して値式を評価する。
+// 戻り値のboolは、0除算や不正な式などで値を作れない場合にfalseになる。
 func evaluateValueExpression(row Row, expression ValueExpression) (Value, bool) {
 	switch expression.Kind {
 	case ValueExpressionColumn:
@@ -3245,6 +3354,8 @@ func evaluateValueExpression(row Row, expression ValueExpression) (Value, bool) 
 	}
 }
 
+// evaluateGroupedValueExpression は集約グループに対してSELECT/HAVING用の値式を評価する。
+// rowsは同じグループの全行、representativeは非集約カラム参照に使う代表行。
 func evaluateGroupedValueExpression(rows []Row, representative Row, expression ValueExpression) (Value, bool) {
 	switch expression.Kind {
 	case ValueExpressionAggregate:
@@ -3271,6 +3382,8 @@ func evaluateGroupedValueExpression(rows []Row, representative Row, expression V
 	}
 }
 
+// evaluateAggregate はCOUNT/SUM/AVG/MIN/MAXをグループ行に対して評価する。
+// 戻り値のboolは未対応集約や不正な引数でfalseになる。
 func evaluateAggregate(rows []Row, expression ValueExpression) (Value, bool) {
 	switch expression.Function {
 	case AggregateCount:
@@ -3440,6 +3553,8 @@ func numericValueAsReal(value Value) float64 {
 	return float64(value.Integer)
 }
 
+// selectRows はSELECT対象のRowをWHERE適用済みで取得する。
+// statementのFROM、JOIN、DUAL、主キー検索指定を見て、戻り値として対象行のスライスを返す。
 func selectRows(statement *Statement, table *Table) []Row {
 	if statement.SelectFromDual {
 		row := dualRow()
@@ -3480,6 +3595,8 @@ func selectRows(statement *Statement, table *Table) []Row {
 	return rows
 }
 
+// selectJoinedRows はJOIN対象の左右テーブルを総当たりし、ON条件に一致する結合行を返す。
+// 戻り値のRowは "alias.column" 形式のキーで左右カラムを保持する。
 func selectJoinedRows(statement *Statement, table *Table) []Row {
 	leftRows := readAllRows(tableView(table, TableDefinition{Schema: statement.SelectJoin.Left.Schema, RootPageNum: statement.SelectJoin.Left.RootPageNum}))
 	rightRows := readAllRows(tableView(table, TableDefinition{Schema: statement.SelectJoin.Right.Schema, RootPageNum: statement.SelectJoin.Right.RootPageNum}))
@@ -3499,6 +3616,8 @@ func selectJoinedRows(statement *Statement, table *Table) []Row {
 	return rows
 }
 
+// readAllRows は指定テーブルの全行をB-Tree順に読み出す。
+// 戻り値はUPDATE/DELETE/SELECTの入力として使うRowスライス。
 func readAllRows(table *Table) []Row {
 	rows := []Row{}
 	cursor := tableStart(table)
@@ -3522,6 +3641,8 @@ func joinRows(left Row, leftReference TableReference, right Row, rightReference 
 	return Row{Values: values}
 }
 
+// sortRows はORDER BY句に従ってRowスライスを安定ソートする。
+// orderByの順に比較し、前の条件が同値だった場合だけ次の条件をタイブレークに使う。
 func sortRows(rows []Row, orderBy []OrderByClause) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		for _, clause := range orderBy {
@@ -3557,6 +3678,8 @@ func compareOrderByValues(left Value, right Value) int {
 	return comparison
 }
 
+// rowMatchesWhere は1行がWHERE条件式に一致するか判定する。
+// expressionがゼロ値の場合はWHERE省略とみなし、全行一致としてtrueを返す。
 func rowMatchesWhere(row Row, expression WhereExpression) bool {
 	switch expression.Kind {
 	case WhereExpressionNone:
@@ -3609,7 +3732,8 @@ func rowMatchesCondition(row Row, condition WhereCondition) bool {
 	}
 }
 
-// パース済みステートメントを実行する。
+// executeStatement はパース済みステートメントを種類ごとの実行関数へ振り分ける。
+// 戻り値はREPLが表示メッセージを決めるためのExecuteResult。
 func executeStatement(statement *Statement, table *Table, out io.Writer) ExecuteResult {
 	switch statement.Type {
 	case StatementCreateTable:

@@ -16,15 +16,20 @@ const (
 
 var defaultRowLayout = DefaultTableSchema().RowLayout()
 
-// Rowを画面表示用の形式で出力する。
+// printRow は1行を現在のスキーマ順に表形式で出力する。
+// rowが出力対象、schemaが表示列の順序、outが書き込み先を表す。
 func printRow(row Row, schema TableSchema, out io.Writer) {
 	printColumns(row, schema.Columns, out)
 }
 
+// printColumns は1行から指定されたカラムだけを表形式で出力する。
+// columnsの順序が表示順になり、戻り値は持たずoutへ直接書き込む。
 func printColumns(row Row, columns []Column, out io.Writer) {
 	printRows([]Row{row}, columns, out)
 }
 
+// printRows は複数Rowを指定カラム順の表形式へ変換して出力する。
+// rowsが空の場合は何も出力せず、戻り値は持たない。
 func printRows(rows []Row, columns []Column, out io.Writer) {
 	valueRows := make([][]Value, 0, len(rows))
 	for _, row := range rows {
@@ -38,6 +43,8 @@ func printRows(rows []Row, columns []Column, out io.Writer) {
 	printValueRows(columnNames(columns), valueRows, out)
 }
 
+// printValueRows は表示ヘッダと値行からASCII表を出力する。
+// headersは列名、rowsは表示値の2次元配列で、列幅は内容から自動計算する。
 func printValueRows(headers []string, rows [][]Value, out io.Writer) {
 	if len(headers) == 0 {
 		return
@@ -68,6 +75,8 @@ func printValueRows(headers []string, rows [][]Value, out io.Writer) {
 	}
 }
 
+// columnNames はColumn一覧から表示用の列名だけを取り出す。
+// 戻り値の順序は入力columnsの順序と同じ。
 func columnNames(columns []Column) []string {
 	names := make([]string, 0, len(columns))
 	for _, column := range columns {
@@ -77,6 +86,8 @@ func columnNames(columns []Column) []string {
 	return names
 }
 
+// printTableValues は1行分の文字列値を指定幅でパディングして出力する。
+// widthsは各列の最小幅で、戻り値は持たずoutへ書き込む。
 func printTableValues(values []string, widths []int, out io.Writer) {
 	fmt.Fprint(out, "|")
 	for i, value := range values {
@@ -85,6 +96,8 @@ func printTableValues(values []string, widths []int, out io.Writer) {
 	fmt.Fprintln(out)
 }
 
+// printTableSeparator は表の区切り線を列幅に合わせて出力する。
+// widthsの各要素に左右余白分を加えた長さで線を作る。
 func printTableSeparator(widths []int, out io.Writer) {
 	fmt.Fprint(out, "+")
 	for _, width := range widths {
@@ -108,6 +121,8 @@ func readFixedString(source []byte) string {
 	return string(source)
 }
 
+// serializedRowSize はRowを現在の可変長レコード形式で保存するためのバイト数を返す。
+// rowの実値とschemaの列順からNULL/数値/文字列/BLOBの格納サイズを合計する。
 func serializedRowSize(row Row, schema TableSchema) uint32 {
 	size := uint32(len(rowRecordFormatMagic))
 	for _, column := range schema.Columns {
@@ -129,7 +144,8 @@ func serializedRowSize(row Row, schema TableSchema) uint32 {
 	return size
 }
 
-// Rowをページ内に保存できる固定長のバイト列へ変換する。
+// serializeRow はRowをページ内に保存できるバイト列へ変換する。
+// sourceが保存対象、schemaが列順と型、destinationが書き込み先バッファで、戻り値は持たない。
 func serializeRow(source Row, schema TableSchema, destination []byte) {
 	clear(destination)
 	if len(destination) == 0 {
@@ -165,7 +181,8 @@ func serializeRow(source Row, schema TableSchema, destination []byte) {
 	}
 }
 
-// 固定長のバイト列からRowを復元する。
+// deserializeRow は保存済みバイト列からRowを復元する。
+// sourceの先頭マジックで現行可変長形式、旧可変長形式、固定長形式を判定して適切に読む。
 func deserializeRow(source []byte, schema TableSchema) Row {
 	if len(source) >= len(rowRecordFormatMagic) && string(source[:len(rowRecordFormatMagic)]) == rowRecordFormatMagic {
 		return deserializeRecordRow(source, schema)
@@ -177,6 +194,8 @@ func deserializeRow(source []byte, schema TableSchema) Row {
 	return deserializeFixedRow(source, schema)
 }
 
+// deserializeRecordRow は現行の可変長レコード形式からRowを復元する。
+// schemaに追加された列がsourceに存在しない場合は、スキーマ変更後の既存行としてNULLを補う。
 func deserializeRecordRow(source []byte, schema TableSchema) Row {
 	row := Row{
 		Values: make(map[string]Value, len(schema.Columns)),
@@ -247,6 +266,8 @@ func deserializeRecordRow(source []byte, schema TableSchema) Row {
 	return row
 }
 
+// deserializeLegacyRecordRow は旧可変長形式の行データを現在のRowへ復元する。
+// 戻り値はschemaの列名をキーにしたValueマップを持つRow。
 func deserializeLegacyRecordRow(source []byte, schema TableSchema) Row {
 	row := Row{
 		Values: make(map[string]Value, len(schema.Columns)),
@@ -281,6 +302,8 @@ func deserializeLegacyRecordRow(source []byte, schema TableSchema) Row {
 	return row
 }
 
+// deserializeFixedRow は初期実装の固定長行形式からRowを復元する。
+// 旧DBファイル互換のために残しており、schemaのRowLayoutで列位置を決める。
 func deserializeFixedRow(source []byte, schema TableSchema) Row {
 	layout := schema.RowLayout()
 	row := Row{
@@ -320,6 +343,8 @@ func mustColumnRange(layout RowLayout, columnName string) (uint32, uint32) {
 	return start, end
 }
 
+// rowValue はRowから指定Columnの値を取り出す。
+// 値が存在しない場合は、ALTER TABLE後の未保存列などとしてNULLを返す。
 func rowValue(row Row, column Column) Value {
 	if value, ok := row.Values[column.Name]; ok {
 		return value
@@ -328,6 +353,8 @@ func rowValue(row Row, column Column) Value {
 	return Value{StorageClass: StorageNull}
 }
 
+// rowKey はRowからスキーマの主キー値をuint32として取り出す。
+// 戻り値のboolは主キー列が存在し、INTEGERかつ有効範囲にある場合だけtrueになる。
 func rowKey(row Row, schema TableSchema) (uint32, bool) {
 	primaryKeyColumn, ok := schema.PrimaryKeyColumn()
 	if !ok {
@@ -346,6 +373,8 @@ func formatRowValue(row Row, column Column) string {
 	return formatValue(rowValue(row, column))
 }
 
+// formatValue はValueを画面表示用の文字列へ変換する。
+// NULLやBLOBなどもSELECT結果で読める表記にして返す。
 func formatValue(value Value) string {
 	if value.StorageClass == StorageNull {
 		return "NULL"

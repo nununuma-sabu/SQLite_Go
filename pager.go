@@ -6,7 +6,8 @@ import (
 	"os"
 )
 
-// DBファイルを開き、ページャを初期化する。
+// pagerOpen はDBファイルを開き、ページキャッシュを管理するPagerを作成する。
+// filenameが対象ファイルで、戻り値はPagerとOSファイル操作エラーを返す。
 func pagerOpen(filename string) (*Pager, error) {
 	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
@@ -35,7 +36,8 @@ func pagerOpen(filename string) (*Pager, error) {
 	}, nil
 }
 
-// DBファイルを開き、空ファイルならpage 0をleaf nodeとして初期化する。
+// dbOpen はDBファイルを開き、Table管理構造を初期化する。
+// 空ファイルならメタデータページとデフォルトテーブルを作り、既存ファイルならメタデータを復元する。
 func dbOpen(filename string) (*Table, error) {
 	pager, err := pagerOpen(filename)
 	if err != nil {
@@ -85,7 +87,8 @@ func dbOpen(filename string) (*Table, error) {
 	return table, nil
 }
 
-// 指定されたページをページャから取得する。
+// getPage は指定ページ番号のページをキャッシュから取得し、未読ならファイルから読み込む。
+// 戻り値はページサイズ分のバイトスライスで、呼び出し側が直接内容を更新できる。
 func getPage(pager *Pager, pageNum uint32) []byte {
 	if pageNum >= tableMaxPages {
 		panic(fmt.Sprintf("Tried to fetch page number out of bounds. %d >= %d", pageNum, tableMaxPages))
@@ -115,7 +118,8 @@ func getPage(pager *Pager, pageNum uint32) []byte {
 	return pager.Pages[pageNum]
 }
 
-// 指定されたページ全体をDBファイルへ書き戻す。
+// pagerFlush はキャッシュ上の1ページをDBファイルへ書き戻す。
+// 戻り値はseek/writeの失敗をerrorとして返す。
 func pagerFlush(pager *Pager, pageNum uint32) error {
 	page := pager.Pages[pageNum]
 	if page == nil {
@@ -138,7 +142,8 @@ func pagerFlush(pager *Pager, pageNum uint32) error {
 	return nil
 }
 
-// キャッシュされたページをDBファイルへflushし、ファイルを閉じる。
+// dbClose はキャッシュされたページをDBファイルへflushし、ファイルを閉じる。
+// メタデータを最新のテーブル定義で書き直し、戻り値でflush/closeのエラーを返す。
 func dbClose(table *Table) error {
 	pager := table.Pager
 	if table.HasMetadata {

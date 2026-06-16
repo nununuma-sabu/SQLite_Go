@@ -20,10 +20,14 @@ type databaseMetadata struct {
 	Tables []TableDefinition `json:"tables,omitempty"`
 }
 
+// isMetadataPage はページ先頭のマジック値からメタデータページか判定する。
+// 戻り値はメタデータマジックが一致した場合にtrueになる。
 func isMetadataPage(page []byte) bool {
 	return bytes.Equal(page[metadataMagicOffset:metadataLengthOffset], metadataMagic)
 }
 
+// readDatabaseMetadata はメタデータページからDBスキーマ情報を復元する。
+// 戻り値は複数テーブル定義を含むmetadataと、不正形式やJSONエラーを表すerror。
 func readDatabaseMetadata(page []byte) (databaseMetadata, error) {
 	if !isMetadataPage(page) {
 		return databaseMetadata{}, fmt.Errorf("metadata page magic mismatch")
@@ -62,6 +66,8 @@ func readDatabaseMetadata(page []byte) (databaseMetadata, error) {
 	return metadata, nil
 }
 
+// writeDatabaseMetadata はDBスキーマ情報をメタデータページへ書き込む。
+// pageが書き込み先で、metadataの検証やJSONサイズ超過があればerrorを返す。
 func writeDatabaseMetadata(page []byte, metadata databaseMetadata) error {
 	if len(metadata.Tables) == 0 {
 		if !metadata.Schema.IsUsable() {
