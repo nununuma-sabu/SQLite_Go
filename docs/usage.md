@@ -362,10 +362,11 @@ db >
 ```
 
 `limit` で表示する件数を制限できます。
-`order by` と組み合わせた場合は、並び替え後の先頭から指定件数を表示します。
+`offset` を組み合わせると、指定した件数を読み飛ばしてから表示します。
+`order by` と組み合わせた場合は、並び替え後に `offset` と `limit` を適用します。
 
 ```text
-db > select username from users order by id desc limit 1;
+db > select username from users order by id asc limit 1 offset 1;
 +----------+
 | username |
 +----------+

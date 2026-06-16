@@ -480,6 +480,7 @@ func prepareStatement(input string, statement *Statement, source any) PrepareRes
 			statement.SelectHaving = selectClause.Having
 			statement.SelectOrderBy = selectClause.OrderBy
 			statement.SelectLimit = selectClause.Limit
+			statement.SelectOffset = selectClause.Offset
 			return PrepareSuccess
 		}
 
@@ -542,6 +543,7 @@ type selectClause struct {
 	Having   HavingExpression
 	OrderBy  []OrderByClause
 	Limit    *uint32
+	Offset   *uint32
 }
 
 type columnResolver struct {
@@ -656,14 +658,16 @@ func parseSelectStatement(input string, table *Table) (selectClause, PrepareResu
 	limitIndex := findSelectLimitIndex(tableWhereOrderAndLimit)
 	tableWhereAndOrder := tableWhereOrderAndLimit
 	var limit *uint32
+	var offset *uint32
 	if limitIndex >= 0 {
 		tableWhereAndOrder = strings.TrimSpace(tableWhereOrderAndLimit[:limitIndex])
 		limitInput := strings.TrimSpace(tableWhereOrderAndLimit[limitIndex+len(" limit "):])
-		parsedLimit, result := parseLimitClause(limitInput)
+		parsedLimit, parsedOffset, result := parseLimitClause(limitInput)
 		if result != PrepareSuccess {
 			return selectClause{}, result
 		}
 		limit = &parsedLimit
+		offset = parsedOffset
 	}
 
 	orderByIndex := findSelectOrderByIndex(tableWhereAndOrder)
@@ -755,7 +759,7 @@ func parseSelectStatement(input string, table *Table) (selectClause, PrepareResu
 		if fromSource.Join != nil || len(groupBy) > 0 || having.Kind != WhereExpressionNone {
 			return selectClause{}, PrepareSyntaxError
 		}
-		return selectClause{Columns: sourceSchema.Columns, Items: selectItemsFromColumns(sourceSchema.Columns), Distinct: distinct, FromDual: fromDual, Source: fromSource.Source, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+		return selectClause{Columns: sourceSchema.Columns, Items: selectItemsFromColumns(sourceSchema.Columns), Distinct: distinct, FromDual: fromDual, Source: fromSource.Source, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit, Offset: offset}, PrepareSuccess
 	}
 
 	itemInputs, ok := splitSQLList(columnList)
@@ -800,7 +804,7 @@ func parseSelectStatement(input string, table *Table) (selectClause, PrepareResu
 		}
 	}
 
-	return selectClause{Columns: columns, Items: items, Distinct: distinct, FromDual: fromDual, Source: fromSource.Source, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit}, PrepareSuccess
+	return selectClause{Columns: columns, Items: items, Distinct: distinct, FromDual: fromDual, Source: fromSource.Source, Join: fromSource.Join, Where: where, GroupBy: groupBy, Having: having, OrderBy: orderBy, Limit: limit, Offset: offset}, PrepareSuccess
 }
 
 type fromSource struct {
@@ -1244,18 +1248,31 @@ func findSelectLimitIndex(body string) int {
 	return -1
 }
 
-func parseLimitClause(input string) (uint32, PrepareResult) {
+func parseLimitClause(input string) (uint32, *uint32, PrepareResult) {
 	fields := strings.Fields(input)
-	if len(fields) != 1 {
-		return 0, PrepareSyntaxError
+	if len(fields) != 1 && len(fields) != 3 {
+		return 0, nil, PrepareSyntaxError
 	}
 
 	limit, err := strconv.ParseUint(fields[0], 10, 32)
 	if err != nil {
-		return 0, PrepareSyntaxError
+		return 0, nil, PrepareSyntaxError
 	}
 
-	return uint32(limit), PrepareSuccess
+	var offset *uint32
+	if len(fields) == 3 {
+		if !strings.EqualFold(fields[1], "offset") {
+			return 0, nil, PrepareSyntaxError
+		}
+		parsedOffset, err := strconv.ParseUint(fields[2], 10, 32)
+		if err != nil {
+			return 0, nil, PrepareSyntaxError
+		}
+		offsetValue := uint32(parsedOffset)
+		offset = &offsetValue
+	}
+
+	return uint32(limit), offset, PrepareSuccess
 }
 
 func parseGroupByClause(input string, resolver columnResolver) ([]Column, PrepareResult) {
@@ -2567,7 +2584,7 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 		if statement.SelectDistinct {
 			valueRows = distinctValueRows(valueRows)
 		}
-		valueRows = limitValueRows(valueRows, statement.SelectLimit)
+		valueRows = pageValueRows(valueRows, statement.SelectLimit, statement.SelectOffset)
 		if len(valueRows) > 0 {
 			printValueRows(selectItemHeaders(items), valueRows, out)
 		}
@@ -2577,7 +2594,7 @@ func executeSelect(statement *Statement, table *Table, out io.Writer) ExecuteRes
 	if statement.SelectDistinct {
 		valueRows = distinctValueRows(valueRows)
 	}
-	valueRows = limitValueRows(valueRows, statement.SelectLimit)
+	valueRows = pageValueRows(valueRows, statement.SelectLimit, statement.SelectOffset)
 
 	if len(valueRows) > 0 {
 		printValueRows(selectItemHeaders(items), valueRows, out)
@@ -2786,9 +2803,15 @@ func valueKey(value Value) string {
 	}
 }
 
-func limitValueRows(rows [][]Value, limit *uint32) [][]Value {
+func pageValueRows(rows [][]Value, limit *uint32, offset *uint32) [][]Value {
 	if limit == nil {
 		return rows
+	}
+	if offset != nil {
+		if uint32(len(rows)) <= *offset {
+			return nil
+		}
+		rows = rows[*offset:]
 	}
 	if *limit == 0 {
 		return nil

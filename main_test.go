@@ -602,6 +602,35 @@ func TestRunExecutesSelectLimit(t *testing.T) {
 	}
 }
 
+func TestRunExecutesSelectLimitOffset(t *testing.T) {
+	got := runTempScript(t, []string{
+		"insert 1 alice alice@example.com",
+		"insert 2 bob bob@example.com",
+		"insert 3 carol carol@example.com",
+		"insert 4 dave dave@example.com",
+		"SELECT username FROM users ORDER BY id ASC LIMIT 2 OFFSET 1;",
+		"SELECT username FROM users ORDER BY id ASC LIMIT 2 OFFSET 3;",
+		"SELECT username FROM users ORDER BY id ASC LIMIT 2 OFFSET 4;",
+		"SELECT username FROM users ORDER BY id ASC LIMIT 0 OFFSET 1;",
+		".exit",
+	})
+
+	wantLines := []string{
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+		"db > Executed.",
+	}
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"username"}, []string{"bob"}, []string{"carol"})...)
+	wantLines = append(wantLines, "Executed.")
+	wantLines = append(wantLines, expectedTableLines("db > ", []string{"username"}, []string{"dave"})...)
+	wantLines = append(wantLines, "Executed.", "db > Executed.", "db > Executed.", "db > ")
+	want := strings.Join(wantLines, "\n")
+	if got != want {
+		t.Fatalf("expected output %q, got %q", want, got)
+	}
+}
+
 func TestRunExecutesSelectOrderByLimit(t *testing.T) {
 	got := runTempScript(t, []string{
 		"create table people (id integer primary key, name text, height real)",
@@ -1339,10 +1368,16 @@ func TestRunPrintsSyntaxErrorForInvalidSelectFrom(t *testing.T) {
 		"SELECT * FROM users ORDER BY id ASC, username SIDEWAYS;",
 		"SELECT * FROM users LIMIT -1;",
 		"SELECT * FROM users LIMIT 1 2;",
+		"SELECT * FROM users LIMIT 1 OFFSET;",
+		"SELECT * FROM users LIMIT 1 OFFSET -1;",
+		"SELECT * FROM users LIMIT 1 OFFSET 1 2;",
 		".exit",
 	})
 
 	want := strings.Join([]string{
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
+		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",
 		"db > Syntax error. Could not parse statement.",

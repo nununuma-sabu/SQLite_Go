@@ -20,6 +20,7 @@ type Statement struct {
 	SelectHaving   HavingExpression
 	SelectOrderBy  []OrderByClause
 	SelectLimit    *uint32
+	SelectOffset   *uint32
 	Schema         TableSchema
 }
 
